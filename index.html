@@ -329,13 +329,15 @@ function setAdminAuthUI(user) {
   const autoNoData = document.getElementById('autoNoData');
   if (!authPane || !autoContent || !userStatus || !signOutBtn) return;
 
+  // Update admin tab visibility immediately on any auth state change
+  if (typeof _enforceAdminTabVisibility === 'function') _enforceAdminTabVisibility();
+
   const topbarAuth = document.getElementById('topbarAuthContainer');
   if (user) {
-    window.adminAllowed = true;
     if (topbarAuth) topbarAuth.style.display = 'flex';
     authPane.style.display = 'block';
-    autoContent.style.display = 'block';
-    if (autoNoData) autoNoData.style.display = '';
+    autoContent.style.display = isAdminUser() ? 'block' : 'none';
+    if (autoNoData) autoNoData.style.display = isAdminUser() ? '' : 'none';
     var assigned = getAssignedPlayer(user.email);
     userStatus.textContent = assigned ? `Logged in as: ${user.email} — Player: ${assigned}` : `Logged in as: ${user.email}`;
     userStatus.style.color = '#1D4ED8';
@@ -354,7 +356,6 @@ function setAdminAuthUI(user) {
       if (typeof checkAndRunAutomaticUpdates === 'function') checkAndRunAutomaticUpdates();
     }, 2000);
   } else {
-    window.adminAllowed = false;
     if (topbarAuth) topbarAuth.style.display = 'none';
     authPane.style.display = 'block';
     autoContent.style.display = 'none';
@@ -1187,6 +1188,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" data-tab="history">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
   <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
+  <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
 
@@ -1557,6 +1559,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
 </div>
 
 <div class="tab-content" id="tab-actions">
+  <div id="actionsLockout" style="display:none;"></div>
   <div style="padding:24px;min-height:160px;">
     <div id="actionsUserInfo" style="font-size:13px;color:var(--color-text-secondary);"></div>
     <div id="actionsTabContent" style="margin-top:18px;"></div>
@@ -2051,7 +2054,49 @@ let nationSheetNames = [];
 let provinceSheetNames = [];
 let currentNationSheet = '';
 let nationsDetailView = false;
-window.adminAllowed = false;
+// ── Admin access guard ────────────────────────────────────────────────────────
+// Only this email may see/use the Admin tab. Change to match your account.
+var ADMIN_EMAIL = 'jacksonacher@gmail.com';
+
+// Always read live from Firebase Auth — never trust a JS variable
+function isAdminUser() {
+  var user = window.firebaseAuth && window.firebaseAuth.currentUser;
+  return !!(user && user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+}
+
+// Keep window.adminAllowed in sync but make it non-writable so console tricks don't work
+Object.defineProperty(window, 'adminAllowed', {
+  get: function() { return isAdminUser(); },
+  set: function() { /* ignored — computed from Firebase Auth only */ },
+  configurable: false
+});
+
+function _enforceAdminTabVisibility() {
+  var btn = document.getElementById('adminTabBtn');
+  var allowed = isAdminUser();
+  if (btn) btn.style.display = allowed ? '' : 'none';
+
+  // If the admin tab is currently active but the user lost access, kick them out
+  if (!allowed) {
+    var adminContent = document.getElementById('tab-autoupdate');
+    if (adminContent && adminContent.classList.contains('active')) {
+      // Switch to the Data tab silently
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+      var dataBtn = document.querySelector('[data-tab="data"]');
+      var dataContent = document.getElementById('tab-data');
+      if (dataBtn) dataBtn.classList.add('active');
+      if (dataContent) dataContent.classList.add('active');
+    }
+  }
+}
+
+// Poll every 5 seconds — defeats any attempt to toggle the flag from the console
+setInterval(_enforceAdminTabVisibility, 5000);
+// Also run immediately once the DOM is ready
+document.addEventListener('DOMContentLoaded', _enforceAdminTabVisibility);
+// ─────────────────────────────────────────────────────────────────────────────
+
 let popup_shown = false; // Track if login popup has been shown
 let userAssignments = loadUserAssignments();
 
@@ -3928,7 +3973,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       openAdminLoginModal();
       return;
     }
-    if (tabName === 'autoupdate' && window.firebaseAuth.currentUser) {
+    // Extra guard: admin tab requires the specific admin email
+    if (tabName === 'autoupdate' && !isAdminUser()) {
+      console.warn('[TAB SWITCH] Admin tab access denied — not the admin account.');
+      openAdminLoginModal();
+      return;
+    }
+    if (tabName === 'autoupdate' && isAdminUser()) {
       const email = window.firebaseAuth.currentUser?.email || 'User';
       console.log(`[TAB SWITCH] User authenticated as ${email}, switching to admin tab.`);
       showAdminToast(`Logged in as ${email}`, 'success');
@@ -5761,6 +5812,7 @@ var weeklyUpdateRan = false;
 
 function populateAutoUpdate() {
   if (!nationsData.length) return;
+  if (!isAdminUser()) return; // only reveal admin panel to the admin account
   var el = document.getElementById('autoNoData');
   if (!el) return;
   el.style.display = 'none';
@@ -10640,6 +10692,7 @@ window.renderMarketplace = renderMarketplace;
 
 <!-- ═══════════ CHAT TAB ═══════════ -->
 <div class="tab-content" id="tab-chat">
+  <div id="chatLockout" style="display:none;"></div>
   <div id="chatLoginGate" style="display:none;color:var(--color-text-tertiary);padding:60px;text-align:center;font-size:14px;">🔒 Log in to use Chat.</div>
   <div id="chatMain" style="display:none;height:calc(100vh - 110px);display:none;flex-direction:column;">
 
@@ -10733,6 +10786,7 @@ function chatPlayerColor(name) {
 
 function subscribeChat() {
   console.log('[CHAT] subscribeChat called, current channel:', chatCurrentChannel);
+  if (isInLockoutPeriod()) { applyLockoutState(); return; }
   if (chatUnsubscribe) { try { chatUnsubscribe(); } catch(e){} chatUnsubscribe = null; }
 
   var db = window.firebaseDb;
@@ -11170,7 +11224,217 @@ window.startDm = startDm;
 window.sendChatMessage = sendChatMessage;
 window.loadChatLastSeenFromCookie = loadChatLastSeenFromCookie;
 window.saveChatLastSeenToCookie = saveChatLastSeenToCookie;
-</script>
+
+// ══════════════════════════════════════════════════════
+// LOCKOUT SYSTEM — Chat & Actions unavailable 8:20 PM – 2:50 AM Sydney time
+// To adjust the window, edit LOCKOUT_START_H/M and LOCKOUT_END_H/M below.
+// ══════════════════════════════════════════════════════
+var LOCKOUT_START_H = 20, LOCKOUT_START_M = 20;  // 8:20 PM
+var LOCKOUT_END_H   =  2, LOCKOUT_END_M   = 50;  // 2:50 AM (next day)
+var SYDNEY_TZ = 'Australia/Sydney';
+
+function getSydneyDate() {
+  // Returns a Date-like object with hours/minutes in Sydney time
+  var now = new Date();
+  var parts = new Intl.DateTimeFormat('en-AU', {
+    timeZone: SYDNEY_TZ,
+    hour: 'numeric', minute: 'numeric', second: 'numeric',
+    hour12: false
+  }).formatToParts(now);
+  var get = function(t) { return parseInt(parts.find(function(p){ return p.type===t; }).value, 10); };
+  return { h: get('hour'), m: get('minute'), s: get('second') };
+}
+
+function isInLockoutPeriod() {
+  var t = getSydneyDate();
+  var nowMins = t.h * 60 + t.m;
+  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M; // 1220
+  var endMins   = LOCKOUT_END_H   * 60 + LOCKOUT_END_M;   //  170
+  // Lockout spans midnight: active if >= start OR < end
+  return nowMins >= startMins || nowMins < endMins;
+}
+
+function minsUntilLockoutEnd() {
+  var t = getSydneyDate();
+  var nowMins = t.h * 60 + t.m;
+  var endMins = LOCKOUT_END_H * 60 + LOCKOUT_END_M;
+  var diff = endMins - nowMins;
+  if (diff <= 0) diff += 24 * 60;
+  return diff;
+}
+
+function minsUntilLockoutStart() {
+  var t = getSydneyDate();
+  var nowMins = t.h * 60 + t.m;
+  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
+  var diff = startMins - nowMins;
+  if (diff <= 0) diff += 24 * 60;
+  return diff;
+}
+
+function secsUntilLockoutEnd() {
+  var now = new Date();
+  var sydney = new Date(now.toLocaleString('en-US', { timeZone: SYDNEY_TZ }));
+  var endToday = new Date(sydney);
+  endToday.setHours(LOCKOUT_END_H, LOCKOUT_END_M, 0, 0);
+  var diff = endToday - sydney;
+  if (diff <= 0) diff += 24 * 60 * 60 * 1000;
+  return Math.floor(diff / 1000);
+}
+
+function formatCountdown(totalSecs) {
+  var h = Math.floor(totalSecs / 3600);
+  var m = Math.floor((totalSecs % 3600) / 60);
+  var s = totalSecs % 60;
+  var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+  if (h > 0) return h + 'h ' + pad(m) + 'm ' + pad(s) + 's';
+  if (m > 0) return pad(m) + 'm ' + pad(s) + 's';
+  return pad(s) + 's';
+}
+
+function buildLockoutHTML(countdownId) {
+  var t = getSydneyDate();
+  var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+  var sydneyTime = pad(t.h) + ':' + pad(t.m);
+  var remaining = secsUntilLockoutEnd();
+  return [
+    '<div style="',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;',
+      'height:calc(100vh - 130px);gap:20px;',
+      'background:var(--color-background-primary);',
+      'user-select:none;',
+    '">',
+      '<div style="font-size:48px;line-height:1;">🔒</div>',
+      '<div style="font-size:20px;font-weight:700;color:var(--color-text-primary);">Unavailable right now</div>',
+      '<div style="font-size:13px;color:var(--color-text-tertiary);text-align:center;max-width:320px;line-height:1.6;">',
+        'Chat and Actions are closed between',
+        ' <strong style="color:var(--color-text-secondary);">8:20 PM</strong> and',
+        ' <strong style="color:var(--color-text-secondary);">2:50 AM</strong> Sydney time.',
+        '<br>Come back when the round opens.',
+      '</div>',
+      '<div style="',
+        'background:var(--color-background-secondary);',
+        'border:1px solid var(--color-border-primary);',
+        'border-radius:var(--border-radius-lg);',
+        'padding:20px 36px;text-align:center;',
+      '">',
+        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--color-accent);margin-bottom:6px;">Opens in</div>',
+        '<div id="' + countdownId + '" style="font-size:32px;font-weight:700;font-family:\'IBM Plex Mono\',monospace;color:var(--color-text-primary);letter-spacing:2px;">',
+          formatCountdown(remaining),
+        '</div>',
+        '<div id="lockoutClock_' + countdownId + '" style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;">Sydney time now: ' + sydneyTime + '</div>',
+      '</div>',
+    '</div>'
+  ].join('');
+}
+
+var _lockoutInterval = null;
+
+function _updateLockoutCountdowns() {
+  if (!isInLockoutPeriod()) {
+    // Lockout just ended — refresh both tabs
+    applyLockoutState();
+    return;
+  }
+  var remaining = secsUntilLockoutEnd();
+  var label = formatCountdown(remaining);
+  ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = label;
+  });
+  // Also update Sydney clock
+  var t = getSydneyDate();
+  var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+  var sydneyTime = pad(t.h) + ':' + pad(t.m);
+  ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
+    var el = document.getElementById('lockoutClock_' + id);
+    if (el) el.textContent = 'Sydney time now: ' + sydneyTime;
+  });
+}
+
+function applyLockoutState() {
+  var locked = isInLockoutPeriod();
+
+  // ── Chat ──
+  var chatLockoutEl  = document.getElementById('chatLockout');
+  var chatLoginGate  = document.getElementById('chatLoginGate');
+  var chatMain       = document.getElementById('chatMain');
+  if (chatLockoutEl) {
+    if (locked) {
+      chatLockoutEl.innerHTML = buildLockoutHTML('chatLockoutCountdown');
+      chatLockoutEl.style.display = 'block';
+      if (chatLoginGate) chatLoginGate.style.display = 'none';
+      if (chatMain)      chatMain.style.display = 'none';
+    } else {
+      chatLockoutEl.style.display = 'none';
+      chatLockoutEl.innerHTML = '';
+      // Let renderChatTab decide what to show
+      if (typeof renderChatTab === 'function') renderChatTab();
+    }
+  }
+
+  // ── Actions ──
+  var actionsLockoutEl  = document.getElementById('actionsLockout');
+  var actionsUserInfo   = document.getElementById('actionsUserInfo');
+  var actionsTabContent = document.getElementById('actionsTabContent');
+  if (actionsLockoutEl) {
+    if (locked) {
+      actionsLockoutEl.innerHTML = buildLockoutHTML('actionsLockoutCountdown');
+      actionsLockoutEl.style.display = 'block';
+      if (actionsUserInfo)   actionsUserInfo.style.display = 'none';
+      if (actionsTabContent) actionsTabContent.style.display = 'none';
+    } else {
+      actionsLockoutEl.style.display = 'none';
+      actionsLockoutEl.innerHTML = '';
+      if (actionsUserInfo)   actionsUserInfo.style.display = '';
+      if (actionsTabContent) actionsTabContent.style.display = '';
+      if (typeof renderActionsTab === 'function') renderActionsTab();
+    }
+  }
+
+  // Start/stop the countdown ticker
+  if (locked && !_lockoutInterval) {
+    _lockoutInterval = setInterval(_updateLockoutCountdowns, 1000); // tick every second
+  } else if (!locked && _lockoutInterval) {
+    clearInterval(_lockoutInterval);
+    _lockoutInterval = null;
+  }
+}
+
+// Patch renderChatTab and renderActionsTab to respect lockout
+var _origRenderChatTab = renderChatTab;
+renderChatTab = function() {
+  if (isInLockoutPeriod()) { applyLockoutState(); return; }
+  _origRenderChatTab.apply(this, arguments);
+};
+window.renderChatTab = renderChatTab;
+
+var _origRenderActionsTab = renderActionsTab;
+renderActionsTab = function() {
+  if (isInLockoutPeriod()) { applyLockoutState(); return; }
+  _origRenderActionsTab.apply(this, arguments);
+};
+window.renderActionsTab = renderActionsTab;
+
+// Block sendChatMessage during lockout
+var _origSendChatMessage = sendChatMessage;
+sendChatMessage = function() {
+  if (isInLockoutPeriod()) {
+    if (typeof overlordAlert === 'function') overlordAlert('Chat is closed until 2:50 AM Sydney time.');
+    return;
+  }
+  return _origSendChatMessage.apply(this, arguments);
+};
+window.sendChatMessage = sendChatMessage;
+
+// Run on page load and when tab nav fires
+document.addEventListener('DOMContentLoaded', function() {
+  applyLockoutState();
+  // Re-check every minute in case the window opens/closes while the page is open
+  setInterval(applyLockoutState, 60000);
+});
+// ══════════════════════════════════════════════════════
+
 
 <!-- ═══════════ ESPIONAGE TAB ═══════════ -->
 <div class="tab-content" id="tab-espionage">
