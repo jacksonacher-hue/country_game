@@ -1560,7 +1560,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
 
 <div class="tab-content" id="tab-actions">
   <div id="actionsLockout" style="display:none;"></div>
-  <div style="padding:24px;min-height:160px;">
+  <div id="actionsTabInner" style="padding:24px;min-height:160px;">
     <div id="actionsUserInfo" style="font-size:13px;color:var(--color-text-secondary);"></div>
     <div id="actionsTabContent" style="margin-top:18px;"></div>
   </div>
@@ -10786,7 +10786,6 @@ function chatPlayerColor(name) {
 
 function subscribeChat() {
   console.log('[CHAT] subscribeChat called, current channel:', chatCurrentChannel);
-  if (isInLockoutPeriod()) { applyLockoutState(); return; }
   if (chatUnsubscribe) { try { chatUnsubscribe(); } catch(e){} chatUnsubscribe = null; }
 
   var db = window.firebaseDb;
@@ -11131,8 +11130,7 @@ async function autoTrimGlobalChatIfNeeded() {
 }
 
 // ── localStorage-persisted last-seen ──
-// (Previously cookie-based; switched to localStorage for GitHub Pages compatibility.
-//  Cookies with path=/ fail on subdirectory-hosted pages like username.github.io/repo/)
+// (Switched from cookies for GitHub Pages compatibility)
 function chatSeenCookieKey() {
   var key = getMyRegisteredUserKey ? getMyRegisteredUserKey() : null;
   return key ? ('chatSeen_' + key) : null;
@@ -11224,7 +11222,10 @@ window.startDm = startDm;
 window.sendChatMessage = sendChatMessage;
 window.loadChatLastSeenFromCookie = loadChatLastSeenFromCookie;
 window.saveChatLastSeenToCookie = saveChatLastSeenToCookie;
+</script>
 
+
+<script>
 // ══════════════════════════════════════════════════════
 // LOCKOUT SYSTEM — Chat & Actions unavailable 8:20 PM – 2:50 AM Sydney time
 // To adjust the window, edit LOCKOUT_START_H/M and LOCKOUT_END_H/M below.
@@ -11233,51 +11234,31 @@ var LOCKOUT_START_H = 20, LOCKOUT_START_M = 20;  // 8:20 PM
 var LOCKOUT_END_H   =  2, LOCKOUT_END_M   = 50;  // 2:50 AM (next day)
 var SYDNEY_TZ = 'Australia/Sydney';
 
-function getSydneyDate() {
-  // Returns a Date-like object with hours/minutes in Sydney time
+function getSydneyTime() {
   var now = new Date();
   var parts = new Intl.DateTimeFormat('en-AU', {
     timeZone: SYDNEY_TZ,
-    hour: 'numeric', minute: 'numeric', second: 'numeric',
-    hour12: false
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false
   }).formatToParts(now);
   var get = function(t) { return parseInt(parts.find(function(p){ return p.type===t; }).value, 10); };
   return { h: get('hour'), m: get('minute'), s: get('second') };
 }
 
 function isInLockoutPeriod() {
-  var t = getSydneyDate();
-  var nowMins = t.h * 60 + t.m;
+  var t = getSydneyTime();
+  var nowMins  = t.h * 60 + t.m;
   var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M; // 1220
   var endMins   = LOCKOUT_END_H   * 60 + LOCKOUT_END_M;   //  170
-  // Lockout spans midnight: active if >= start OR < end
+  // Spans midnight: locked if >= start OR < end
   return nowMins >= startMins || nowMins < endMins;
-}
-
-function minsUntilLockoutEnd() {
-  var t = getSydneyDate();
-  var nowMins = t.h * 60 + t.m;
-  var endMins = LOCKOUT_END_H * 60 + LOCKOUT_END_M;
-  var diff = endMins - nowMins;
-  if (diff <= 0) diff += 24 * 60;
-  return diff;
-}
-
-function minsUntilLockoutStart() {
-  var t = getSydneyDate();
-  var nowMins = t.h * 60 + t.m;
-  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
-  var diff = startMins - nowMins;
-  if (diff <= 0) diff += 24 * 60;
-  return diff;
 }
 
 function secsUntilLockoutEnd() {
   var now = new Date();
   var sydney = new Date(now.toLocaleString('en-US', { timeZone: SYDNEY_TZ }));
-  var endToday = new Date(sydney);
-  endToday.setHours(LOCKOUT_END_H, LOCKOUT_END_M, 0, 0);
-  var diff = endToday - sydney;
+  var end = new Date(sydney);
+  end.setHours(LOCKOUT_END_H, LOCKOUT_END_M, 0, 0);
+  var diff = end - sydney;
   if (diff <= 0) diff += 24 * 60 * 60 * 1000;
   return Math.floor(diff / 1000);
 }
@@ -11293,62 +11274,56 @@ function formatCountdown(totalSecs) {
 }
 
 function buildLockoutHTML(countdownId) {
-  var t = getSydneyDate();
+  var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
   var sydneyTime = pad(t.h) + ':' + pad(t.m);
-  var remaining = secsUntilLockoutEnd();
   return [
-    '<div style="',
-      'display:flex;flex-direction:column;align-items:center;justify-content:center;',
-      'height:calc(100vh - 130px);gap:20px;',
-      'background:var(--color-background-primary);',
-      'user-select:none;',
-    '">',
+    '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;',
+      'height:calc(100vh - 130px);gap:20px;background:var(--color-background-primary);user-select:none;">',
       '<div style="font-size:48px;line-height:1;">🔒</div>',
       '<div style="font-size:20px;font-weight:700;color:var(--color-text-primary);">Unavailable right now</div>',
       '<div style="font-size:13px;color:var(--color-text-tertiary);text-align:center;max-width:320px;line-height:1.6;">',
-        'Chat and Actions are closed between',
-        ' <strong style="color:var(--color-text-secondary);">8:20 PM</strong> and',
-        ' <strong style="color:var(--color-text-secondary);">2:50 AM</strong> Sydney time.',
+        'Chat and Actions are closed between ',
+        '<strong style="color:var(--color-text-secondary);">8:20 PM</strong> and ',
+        '<strong style="color:var(--color-text-secondary);">2:50 AM</strong> Sydney time.',
         '<br>Come back when the round opens.',
       '</div>',
-      '<div style="',
-        'background:var(--color-background-secondary);',
-        'border:1px solid var(--color-border-primary);',
-        'border-radius:var(--border-radius-lg);',
-        'padding:20px 36px;text-align:center;',
-      '">',
-        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--color-accent);margin-bottom:6px;">Opens in</div>',
-        '<div id="' + countdownId + '" style="font-size:32px;font-weight:700;font-family:\'IBM Plex Mono\',monospace;color:var(--color-text-primary);letter-spacing:2px;">',
-          formatCountdown(remaining),
+      '<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-primary);',
+        'border-radius:var(--border-radius-lg);padding:20px 36px;text-align:center;">',
+        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;',
+          'color:var(--color-accent);margin-bottom:6px;">Opens in</div>',
+        '<div id="' + countdownId + '" style="font-size:32px;font-weight:700;',
+          'font-family:\'IBM Plex Mono\',monospace;color:var(--color-text-primary);letter-spacing:2px;">',
+          formatCountdown(secsUntilLockoutEnd()),
         '</div>',
-        '<div id="lockoutClock_' + countdownId + '" style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;">Sydney time now: ' + sydneyTime + '</div>',
+        '<div id="lockoutClock_' + countdownId + '" style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;">',
+          'Sydney time: ' + sydneyTime,
+        '</div>',
       '</div>',
     '</div>'
   ].join('');
 }
 
-var _lockoutInterval = null;
+var _lockoutTickInterval = null;
 
-function _updateLockoutCountdowns() {
+function _lockoutTick() {
   if (!isInLockoutPeriod()) {
-    // Lockout just ended — refresh both tabs
+    // Window just ended — lift lockout
+    clearInterval(_lockoutTickInterval); _lockoutTickInterval = null;
     applyLockoutState();
     return;
   }
-  var remaining = secsUntilLockoutEnd();
-  var label = formatCountdown(remaining);
+  var label = formatCountdown(secsUntilLockoutEnd());
   ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.textContent = label;
   });
-  // Also update Sydney clock
-  var t = getSydneyDate();
+  var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
-  var sydneyTime = pad(t.h) + ':' + pad(t.m);
+  var clock = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
   ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById('lockoutClock_' + id);
-    if (el) el.textContent = 'Sydney time now: ' + sydneyTime;
+    if (el) el.textContent = 'Sydney time: ' + clock;
   });
 }
 
@@ -11356,9 +11331,9 @@ function applyLockoutState() {
   var locked = isInLockoutPeriod();
 
   // ── Chat ──
-  var chatLockoutEl  = document.getElementById('chatLockout');
-  var chatLoginGate  = document.getElementById('chatLoginGate');
-  var chatMain       = document.getElementById('chatMain');
+  var chatLockoutEl = document.getElementById('chatLockout');
+  var chatLoginGate = document.getElementById('chatLoginGate');
+  var chatMain      = document.getElementById('chatMain');
   if (chatLockoutEl) {
     if (locked) {
       chatLockoutEl.innerHTML = buildLockoutHTML('chatLockoutCountdown');
@@ -11368,73 +11343,56 @@ function applyLockoutState() {
     } else {
       chatLockoutEl.style.display = 'none';
       chatLockoutEl.innerHTML = '';
-      // Let renderChatTab decide what to show
       if (typeof renderChatTab === 'function') renderChatTab();
     }
   }
 
   // ── Actions ──
   var actionsLockoutEl  = document.getElementById('actionsLockout');
-  var actionsUserInfo   = document.getElementById('actionsUserInfo');
-  var actionsTabContent = document.getElementById('actionsTabContent');
+  var actionsInner      = document.getElementById('actionsTabInner');
   if (actionsLockoutEl) {
     if (locked) {
       actionsLockoutEl.innerHTML = buildLockoutHTML('actionsLockoutCountdown');
       actionsLockoutEl.style.display = 'block';
-      if (actionsUserInfo)   actionsUserInfo.style.display = 'none';
-      if (actionsTabContent) actionsTabContent.style.display = 'none';
+      if (actionsInner) actionsInner.style.display = 'none';
     } else {
       actionsLockoutEl.style.display = 'none';
       actionsLockoutEl.innerHTML = '';
-      if (actionsUserInfo)   actionsUserInfo.style.display = '';
-      if (actionsTabContent) actionsTabContent.style.display = '';
+      if (actionsInner) actionsInner.style.display = '';
       if (typeof renderActionsTab === 'function') renderActionsTab();
     }
   }
 
-  // Start/stop the countdown ticker
-  if (locked && !_lockoutInterval) {
-    _lockoutInterval = setInterval(_updateLockoutCountdowns, 1000); // tick every second
-  } else if (!locked && _lockoutInterval) {
-    clearInterval(_lockoutInterval);
-    _lockoutInterval = null;
+  // Tick every second while locked
+  if (locked && !_lockoutTickInterval) {
+    _lockoutTickInterval = setInterval(_lockoutTick, 1000);
   }
 }
 
-// Patch renderChatTab and renderActionsTab to respect lockout
-var _origRenderChatTab = renderChatTab;
-renderChatTab = function() {
-  if (isInLockoutPeriod()) { applyLockoutState(); return; }
-  _origRenderChatTab.apply(this, arguments);
-};
-window.renderChatTab = renderChatTab;
-
-var _origRenderActionsTab = renderActionsTab;
-renderActionsTab = function() {
-  if (isInLockoutPeriod()) { applyLockoutState(); return; }
-  _origRenderActionsTab.apply(this, arguments);
-};
-window.renderActionsTab = renderActionsTab;
-
-// Block sendChatMessage during lockout
-var _origSendChatMessage = sendChatMessage;
-sendChatMessage = function() {
+// Block sending during lockout
+var _origSendChatMessage = window.sendChatMessage;
+window.sendChatMessage = function() {
   if (isInLockoutPeriod()) {
     if (typeof overlordAlert === 'function') overlordAlert('Chat is closed until 2:50 AM Sydney time.');
     return;
   }
   return _origSendChatMessage.apply(this, arguments);
 };
-window.sendChatMessage = sendChatMessage;
 
-// Run on page load and when tab nav fires
+// Block subscribeChat during lockout (no point opening Firebase listeners)
+var _origSubscribeChat = window.subscribeChat;
+window.subscribeChat = function() {
+  if (isInLockoutPeriod()) { applyLockoutState(); return; }
+  return _origSubscribeChat.apply(this, arguments);
+};
+
+// Run on load and re-check every 60s in case the window opens while page is open
 document.addEventListener('DOMContentLoaded', function() {
   applyLockoutState();
-  // Re-check every minute in case the window opens/closes while the page is open
   setInterval(applyLockoutState, 60000);
 });
 // ══════════════════════════════════════════════════════
-
+</script>
 
 <!-- ═══════════ ESPIONAGE TAB ═══════════ -->
 <div class="tab-content" id="tab-espionage">
