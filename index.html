@@ -1170,6 +1170,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
     Nation Command Centre
   </div>
   <div class="topbar-status" id="statusBar">No data loaded</div>
+  <div id="lockoutDebugHud" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.5px;padding:3px 10px;border-radius:20px;border:1px solid var(--color-border-primary);background:var(--color-background-secondary);color:var(--color-text-tertiary);white-space:nowrap;cursor:default;" title="Lockout debug">⏱ …</div>
   <div id="topbarAuthContainer" style="display:none;margin-left:auto;align-items:center;gap:12px;">
     <span id="topbarUserEmail" style="font-size:11px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;">Not logged in</span>
     <button id="topbarSignOutBtn" style="padding:5px 12px;font-family:inherit;font-size:11px;font-weight:600;background:var(--color-background-secondary);color:var(--color-text-secondary);border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);cursor:pointer;letter-spacing:0.3px;text-transform:uppercase;">Sign Out</button>
@@ -11227,11 +11228,11 @@ window.saveChatLastSeenToCookie = saveChatLastSeenToCookie;
 
 <script>
 // ══════════════════════════════════════════════════════
-// LOCKOUT SYSTEM — Chat & Actions unavailable 8:20 PM – 2:50 AM Sydney time
+// LOCKOUT SYSTEM — Chat & Actions unavailable 8:20 AM – 2:50 PM Sydney time (school hours)
 // To adjust the window, edit LOCKOUT_START_H/M and LOCKOUT_END_H/M below.
 // ══════════════════════════════════════════════════════
-var LOCKOUT_START_H = 20, LOCKOUT_START_M = 20;  // 8:20 PM
-var LOCKOUT_END_H   =  2, LOCKOUT_END_M   = 50;  // 2:50 AM (next day)
+var LOCKOUT_START_H =  8, LOCKOUT_START_M = 20;  // 8:20 AM
+var LOCKOUT_END_H   = 14, LOCKOUT_END_M   = 50;  // 2:50 PM
 var SYDNEY_TZ = 'Australia/Sydney';
 
 function getSydneyTime() {
@@ -11247,10 +11248,12 @@ function getSydneyTime() {
 function isInLockoutPeriod() {
   var t = getSydneyTime();
   var nowMins  = t.h * 60 + t.m;
-  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M; // 1220
-  var endMins   = LOCKOUT_END_H   * 60 + LOCKOUT_END_M;   //  170
-  // Spans midnight: locked if >= start OR < end
-  return nowMins >= startMins || nowMins < endMins;
+  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
+  var endMins   = LOCKOUT_END_H   * 60 + LOCKOUT_END_M;
+  // Same-day window (no midnight span): locked if between start and end
+  var locked = nowMins >= startMins && nowMins < endMins;
+  console.log('[LOCKOUT] nowMins=' + nowMins + ' startMins=' + startMins + ' endMins=' + endMins + ' → locked=' + locked);
+  return locked;
 }
 
 function secsUntilLockoutEnd() {
@@ -11276,32 +11279,84 @@ function formatCountdown(totalSecs) {
 function buildLockoutHTML(countdownId) {
   var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
-  var sydneyTime = pad(t.h) + ':' + pad(t.m);
-  return [
-    '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;',
-      'height:calc(100vh - 130px);gap:20px;background:var(--color-background-primary);user-select:none;">',
-      '<div style="font-size:48px;line-height:1;">🔒</div>',
-      '<div style="font-size:20px;font-weight:700;color:var(--color-text-primary);">Unavailable right now</div>',
-      '<div style="font-size:13px;color:var(--color-text-tertiary);text-align:center;max-width:320px;line-height:1.6;">',
-        'Chat and Actions are closed between ',
-        '<strong style="color:var(--color-text-secondary);">8:20 PM</strong> and ',
-        '<strong style="color:var(--color-text-secondary);">2:50 AM</strong> Sydney time.',
-        '<br>Come back when the round opens.',
-      '</div>',
-      '<div style="background:var(--color-background-secondary);border:1px solid var(--color-border-primary);',
-        'border-radius:var(--border-radius-lg);padding:20px 36px;text-align:center;">',
-        '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;',
-          'color:var(--color-accent);margin-bottom:6px;">Opens in</div>',
-        '<div id="' + countdownId + '" style="font-size:32px;font-weight:700;',
-          'font-family:\'IBM Plex Mono\',monospace;color:var(--color-text-primary);letter-spacing:2px;">',
-          formatCountdown(secsUntilLockoutEnd()),
-        '</div>',
-        '<div id="lockoutClock_' + countdownId + '" style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;">',
-          'Sydney time: ' + sydneyTime,
-        '</div>',
-      '</div>',
-    '</div>'
-  ].join('');
+  var sydneyTime = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
+  var countdown = formatCountdown(secsUntilLockoutEnd());
+
+  return '<div style="' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'height:calc(100vh - 130px);gap:0;background:var(--color-background-primary);' +
+      'user-select:none;position:relative;overflow:hidden;font-family:\'IBM Plex Mono\',monospace;' +
+    '">' +
+
+    '<div style="' +
+      'position:absolute;inset:0;' +
+      'background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),' +
+        'linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);' +
+      'background-size:40px 40px;pointer-events:none;' +
+    '"></div>' +
+
+    '<div style="' +
+      'position:absolute;font-size:clamp(60px,14vw,130px);font-weight:900;letter-spacing:-2px;' +
+      'color:rgba(255,255,255,0.03);white-space:nowrap;pointer-events:none;' +
+      'top:50%;left:50%;transform:translate(-50%,-50%) rotate(-8deg);' +
+    '">BLOCKED</div>' +
+
+    '<div style="' +
+      'position:relative;z-index:1;' +
+      'background:var(--color-background-secondary);' +
+      'border:1px solid var(--color-border-primary);' +
+      'border-top:3px solid #ef4444;' +
+      'border-radius:var(--border-radius-lg);' +
+      'padding:32px 40px;text-align:center;max-width:420px;width:90%;' +
+      'box-shadow:0 20px 60px rgba(0,0,0,0.5);' +
+    '">' +
+
+      '<div style="font-size:36px;margin-bottom:16px;line-height:1;">🚫</div>' +
+
+      '<div style="' +
+        'font-size:22px;font-weight:800;letter-spacing:1px;text-transform:uppercase;' +
+        'color:#ef4444;margin-bottom:6px;' +
+      '">Blocked</div>' +
+
+      '<div style="' +
+        'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;' +
+        'color:var(--color-text-tertiary);margin-bottom:20px;' +
+      '">during class time</div>' +
+
+      '<div style="height:1px;background:var(--color-border-secondary);margin-bottom:20px;"></div>' +
+
+      '<div style="' +
+        'font-size:12px;color:var(--color-text-tertiary);line-height:1.7;margin-bottom:24px;' +
+        'font-family:\'IBM Plex Sans\',sans-serif;' +
+      '">' +
+        'Chat and Actions are offline between<br>' +
+        '<span style="color:var(--color-text-secondary);font-weight:600;">8:20 AM</span>' +
+        ' and ' +
+        '<span style="color:var(--color-text-secondary);font-weight:600;">2:50 PM</span>' +
+        ' Sydney time.<br>' +
+        'Go do something productive.' +
+      '</div>' +
+
+      '<div style="' +
+        'background:var(--color-background-primary);' +
+        'border:1px solid var(--color-border-primary);' +
+        'border-radius:var(--border-radius-md);' +
+        'padding:14px 20px;' +
+      '">' +
+        '<div style="' +
+          'font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:2px;' +
+          'color:var(--color-text-tertiary);margin-bottom:8px;' +
+        '">Unlocks in</div>' +
+        '<div id="' + countdownId + '" style="' +
+          'font-size:28px;font-weight:700;letter-spacing:3px;color:#ef4444;' +
+        '">' + countdown + '</div>' +
+        '<div id="lockoutClock_' + countdownId + '" style="' +
+          'font-size:10px;color:var(--color-text-tertiary);margin-top:6px;letter-spacing:1px;' +
+        '">SYD ' + sydneyTime + '</div>' +
+      '</div>' +
+
+    '</div>' +
+  '</div>';
 }
 
 var _lockoutTickInterval = null;
@@ -11329,6 +11384,7 @@ function _lockoutTick() {
 
 function applyLockoutState() {
   var locked = isInLockoutPeriod();
+  console.log('[LOCKOUT] applyLockoutState called, locked=' + locked);
 
   // ── Chat ──
   var chatLockoutEl = document.getElementById('chatLockout');
@@ -11373,7 +11429,7 @@ function applyLockoutState() {
 var _origSendChatMessage = window.sendChatMessage;
 window.sendChatMessage = function() {
   if (isInLockoutPeriod()) {
-    if (typeof overlordAlert === 'function') overlordAlert('Chat is closed until 2:50 AM Sydney time.');
+    if (typeof overlordAlert === 'function') overlordAlert('Chat is closed until 2:50 PM Sydney time.');
     return;
   }
   return _origSendChatMessage.apply(this, arguments);
@@ -11386,11 +11442,49 @@ window.subscribeChat = function() {
   return _origSubscribeChat.apply(this, arguments);
 };
 
-// Run on load and re-check every 60s in case the window opens while page is open
-document.addEventListener('DOMContentLoaded', function() {
-  applyLockoutState();
-  setInterval(applyLockoutState, 60000);
+// ── Debug HUD updater ──
+function _updateLockoutHud() {
+  var hud = document.getElementById('lockoutDebugHud');
+  if (!hud) return;
+  var t = getSydneyTime();
+  var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+  var locked = isInLockoutPeriod();
+  var nowMins = t.h * 60 + t.m;
+  var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
+  var endMins = LOCKOUT_END_H * 60 + LOCKOUT_END_M;
+  var timeStr = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
+  hud.textContent = 'SYD ' + timeStr + ' | ' + (locked ? '🔴 BLOCKED' : '🟢 OPEN');
+  hud.style.color = locked ? '#ef4444' : 'var(--color-text-tertiary)';
+  hud.style.borderColor = locked ? 'rgba(239,68,68,0.4)' : 'var(--color-border-primary)';
+}
+
+// Re-hook tab buttons to run lockout check on every tab switch
+document.querySelectorAll('.tab-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var tab = btn.getAttribute('data-tab');
+    if (tab === 'chat' || tab === 'actions') {
+      setTimeout(applyLockoutState, 0);
+    }
+  });
 });
+
+// Run immediately (DOMContentLoaded has almost certainly already fired at this point
+// since this script is near the bottom of the page)
+console.log('[LOCKOUT] Initialising. Sydney time:', (function(){
+  var t = getSydneyTime();
+  var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+  return pad(t.h)+':'+pad(t.m)+':'+pad(t.s);
+})());
+console.log('[LOCKOUT] isInLockoutPeriod:', isInLockoutPeriod());
+console.log('[LOCKOUT] LOCKOUT_START:', LOCKOUT_START_H + ':' + (LOCKOUT_START_M < 10 ? '0' : '') + LOCKOUT_START_M,
+            '| LOCKOUT_END:', LOCKOUT_END_H + ':' + (LOCKOUT_END_M < 10 ? '0' : '') + LOCKOUT_END_M);
+
+applyLockoutState();
+
+// HUD ticks every second; lockout state re-checked every 30s
+setInterval(_updateLockoutHud, 1000);
+setInterval(applyLockoutState, 30000);
+_updateLockoutHud();
 // ══════════════════════════════════════════════════════
 </script>
 
