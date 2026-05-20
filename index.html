@@ -4004,8 +4004,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
     // Actions tab: re-render and subscribe to live Firebase request updates
     if (tabName === 'actions') {
-      renderActionsTab();
-      subscribePlayerRequests();
+      if (isInLockoutPeriod()) { applyLockoutState(); }
+      else { renderActionsTab(); subscribePlayerRequests(); }
     }
     // History tab: subscribe to live game log
     if (tabName === 'history') {
@@ -4023,6 +4023,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     }
     // Chat tab
     if (tabName === 'chat') {
+      if (isInLockoutPeriod()) { applyLockoutState(); return; }
       renderChatTab();
       subscribeChat();
       var _nowMsgs = chatMessagesCache[chatCurrentChannel] || [];
@@ -5813,12 +5814,14 @@ var weeklyUpdateRan = false;
 
 function populateAutoUpdate() {
   if (!nationsData.length) return;
-  if (!isAdminUser()) return; // only reveal admin panel to the admin account
+  // Always init the working copy — Actions, Marketplace etc. all depend on workingNations
+  initWorkingCopy();
+  // Admin panel UI only for the admin account
+  if (!isAdminUser()) return;
   var el = document.getElementById('autoNoData');
   if (!el) return;
   el.style.display = 'none';
   document.getElementById('autoContent').style.display = 'block';
-  initWorkingCopy();
   // Check if automatic daily update needs to run now that data is loaded
   setTimeout(function() {
     if (typeof checkAndRunAutomaticUpdates === 'function') checkAndRunAutomaticUpdates();
@@ -11399,7 +11402,6 @@ function applyLockoutState() {
     } else {
       chatLockoutEl.style.display = 'none';
       chatLockoutEl.innerHTML = '';
-      if (typeof renderChatTab === 'function') renderChatTab();
     }
   }
 
@@ -11415,7 +11417,6 @@ function applyLockoutState() {
       actionsLockoutEl.style.display = 'none';
       actionsLockoutEl.innerHTML = '';
       if (actionsInner) actionsInner.style.display = '';
-      if (typeof renderActionsTab === 'function') renderActionsTab();
     }
   }
 
@@ -11458,15 +11459,7 @@ function _updateLockoutHud() {
   hud.style.borderColor = locked ? 'rgba(239,68,68,0.4)' : 'var(--color-border-primary)';
 }
 
-// Re-hook tab buttons to run lockout check on every tab switch
-document.querySelectorAll('.tab-btn').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var tab = btn.getAttribute('data-tab');
-    if (tab === 'chat' || tab === 'actions') {
-      setTimeout(applyLockoutState, 0);
-    }
-  });
-});
+
 
 // Run immediately (DOMContentLoaded has almost certainly already fired at this point
 // since this script is near the bottom of the page)
@@ -11483,7 +11476,7 @@ applyLockoutState();
 
 // HUD ticks every second; lockout state re-checked every 30s
 setInterval(_updateLockoutHud, 1000);
-setInterval(applyLockoutState, 30000);
+setInterval(applyLockoutState, 60000);
 _updateLockoutHud();
 // ══════════════════════════════════════════════════════
 </script>
