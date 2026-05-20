@@ -3724,19 +3724,7 @@ let playerRequests = [];
 async function loadPlayerRequestsFromFirebase() {
   try {
     var ref = window.firebaseRef(window.firebaseDb, 'playerRequests');
-    var snap = await window.firebaseGet ? window.firebaseGet(ref) : null;
-    if (!snap) {
-      // Fallback: use firebase get via already imported get
-      var db = window.firebaseDb;
-      var reqRef = window.firebaseRef(db, 'playerRequests');
-      playerRequests = [];
-      window.firebaseOnValue(reqRef, function(snapshot) {
-        var data = snapshot.val();
-        playerRequests = data ? Object.values(data) : [];
-        renderPlayerRequests();
-      });
-      return;
-    }
+    var snap = await window.firebaseGet(ref);
     playerRequests = snap.exists() ? Object.values(snap.val()) : [];
     renderPlayerRequests();
   } catch(e) {
