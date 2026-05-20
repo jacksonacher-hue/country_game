@@ -11069,6 +11069,7 @@ window.ecoConvertQuick = ecoConvertQuick;
 <div class="tab-content" id="tab-chat">
   <div id="chatLockout" style="display:none;"></div>
   <div id="chatLoginGate" style="display:none;color:var(--color-text-tertiary);padding:60px;text-align:center;font-size:14px;">🔒 Log in to use Chat.</div>
+  <div id="chatNoPlayerGate" style="display:none;color:var(--color-text-tertiary);padding:60px;text-align:center;font-size:14px;">⛔ You must be assigned a player nation to use Chat.</div>
   <div id="chatMain" style="display:none;height:calc(100vh - 110px);display:none;flex-direction:column;">
 
     <!-- Layout: sidebar + messages -->
@@ -11250,6 +11251,7 @@ async function sendChatMessage() {
   var myEmail = chatGetMyEmail();
   var myPlayer = chatGetMyPlayer();
   if (!myEmail) { overlordAlert('Log in to chat.'); return; }
+  if ((typeof findAssignedPlayerIdx === 'function') && findAssignedPlayerIdx() < 0) { overlordAlert('You must be assigned a player nation to send messages.'); return; }
 
   console.log('[CHAT] Sending message to channel:', chatCurrentChannel, '| text:', text.slice(0,60));
 
@@ -11303,10 +11305,15 @@ function renderChatTab() {
   var main = document.getElementById('chatMain');
   if (!loginGate || !main) return;
 
+  var noPlayerGate = document.getElementById('chatNoPlayerGate');
   if (!user) {
-    loginGate.style.display = 'block'; main.style.display = 'none'; return;
+    loginGate.style.display = 'block'; if (noPlayerGate) noPlayerGate.style.display = 'none'; main.style.display = 'none'; return;
   }
-  loginGate.style.display = 'none'; main.style.display = 'flex';
+  var assignedIdx = (typeof findAssignedPlayerIdx === 'function') ? findAssignedPlayerIdx() : -1;
+  if (assignedIdx < 0) {
+    loginGate.style.display = 'none'; if (noPlayerGate) noPlayerGate.style.display = 'block'; main.style.display = 'none'; return;
+  }
+  loginGate.style.display = 'none'; if (noPlayerGate) noPlayerGate.style.display = 'none'; main.style.display = 'flex';
 
   // Player label
   var label = document.getElementById('chatPlayerLabel');
