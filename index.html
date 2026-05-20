@@ -1725,13 +1725,6 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
           <button onclick="createSubsidy()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fff;background:#1D9E75;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Create</button>
         </div>
 
-        <div style="font-size:12px;font-weight:500;color:var(--color-text-tertiary);margin-bottom:6px;">Convert Eco → Military (2:1 ratio)</div>
-        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;">
-          <div><label class="auto-label">Player</label><select id="convertPlayer" style="padding:8px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);min-width:140px;"></select></div>
-          <div><label class="auto-label">Eco pts (even)</label><input type="number" id="convertEco" value="2" min="2" step="2" style="width:70px;padding:8px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);"></div>
-          <button onclick="convertEcoToMil()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fff;background:#D85A30;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Convert</button>
-        </div>
-
         <hr style="border:none;border-top:0.5px solid var(--color-border-tertiary);margin:16px 0;">
 
         <div class="auto-sub-title">War Start</div>
@@ -2587,16 +2580,6 @@ function renderActionsTab() {
               </div>
               <button class="action-btn primary" onclick="performSubsidyAction()">Subsidise</button>
             </div>
-          </div>
-
-          <!-- Eco → Mil conversion -->
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--color-text-secondary);margin-bottom:8px;">Convert Eco → Military</div>
-            <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">
-              <div class="action-field"><label>Eco to convert (must be even)</label><input id="actionsConvertEco" type="number" min="2" step="2" value="2"></div>
-              <button class="action-btn gold" onclick="performConvertEcoAction()">Convert</button>
-            </div>
-            <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:6px;">Every 2 eco → +1 military. Your current eco: <strong style="color:var(--color-text-secondary);">${(parseFloat(p.econ)||0).toFixed(1)}</strong></div>
           </div>
 
           <!-- Give resources -->
@@ -10296,6 +10279,21 @@ window.updateClaimBudget = updateClaimBudget;
       </div>
     </div>
 
+    <!-- ── Economics Section ── -->
+    <div id="mktEconomicsSection" style="padding:20px 24px;border-bottom:1px solid var(--color-border-secondary);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#a78bfa;">📊 Market Economics</div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px;">Live conversion rates derived from all open offers — anchored to Eco</div>
+        </div>
+        <button onclick="refreshEcoRates()" style="padding:5px 14px;font-family:inherit;font-size:11px;font-weight:700;color:#a78bfa;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.3);border-radius:var(--border-radius-md);cursor:pointer;letter-spacing:0.3px;">↺ Refresh</button>
+      </div>
+      <div id="mktEcoRatesGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+        <div style="color:var(--color-text-tertiary);font-size:12px;padding:12px;text-align:center;background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);">Loading rates…</div>
+      </div>
+      <div id="mktEcoRatesBasis" style="margin-top:10px;font-size:11px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;"></div>
+    </div>
+
     <div style="padding:20px 24px;display:grid;gap:20px;">
 
       <!-- ── Create Offer Panel ── -->
@@ -10842,6 +10840,9 @@ function renderMarketplace() {
       }).join('');
     }
   }
+
+  // Update economics panel whenever offers re-render
+  if (typeof renderEcoRates === 'function') { try { renderEcoRates(); } catch(e) {} }
 }
 
 function mktToggleAuctionFields() {
@@ -10886,6 +10887,208 @@ window.acceptMarketplaceOffer = acceptMarketplaceOffer;
 window.subscribeMarketplace = subscribeMarketplace;
 window.renderMarketplace = renderMarketplace;
 (function(){ setInterval(function(){ if (marketplaceOffers.some(function(o){ return o.listingType==='auction'; })) renderMarketplace(); }, 60000); })();
+</script>
+
+<script>
+// ══════════════════════════════════════════════════════
+// MARKET ECONOMICS — Eco-anchored conversion rates
+// ══════════════════════════════════════════════════════
+
+var ECO_RATE_RESOURCES = ['military','defence','food','happiness','stability'];
+
+var ECO_RATE_META = {
+  military:  { label: 'Military',  color: '#f87171' },
+  defence:   { label: 'Defence',   color: '#60a5fa' },
+  food:      { label: 'Food',      color: '#fbbf24' },
+  happiness: { label: 'Happiness', color: '#a78bfa' },
+  stability: { label: 'Stability', color: '#34d399' }
+};
+
+// Fallback rates when <=1 open offers exist: 2:1 for mil, 1:1 for rest
+var ECO_DEFAULT_RATES = {
+  military: 0.5,    // 2 eco → 1 mil
+  defence:  1,
+  food:     1,
+  happiness:1,
+  stability:1
+};
+
+function ecoExtractPairs(offer) {
+  var pairs = [];
+  var hasGive2 = offer.give2Resource && offer.give2Amount > 0;
+  var hasGet2  = offer.get2Resource  && offer.get2Amount  > 0;
+  if (hasGive2 || hasGet2) return pairs;
+  var gR = offer.give1Resource, gA = parseFloat(offer.give1Amount) || 0;
+  var wR = offer.get1Resource,  wA = parseFloat(offer.get1Amount)  || 0;
+  if (!gR || !wR || gA <= 0 || wA <= 0) return pairs;
+  pairs.push({ from: gR, to: wR, rate: wA / gA });
+  pairs.push({ from: wR, to: gR, rate: gA / wA });
+  return pairs;
+}
+
+function computeEcoConversionRates() {
+  var offers = (typeof marketplaceOffers !== 'undefined' ? marketplaceOffers : [])
+    .filter(function(o) { return o.status === 'open'; });
+
+  // Build samples map: "resA:resB" -> [rate,...] where rate = resB per 1 resA
+  var samples = {};
+  offers.forEach(function(offer) {
+    ecoExtractPairs(offer).forEach(function(p) {
+      var key = p.from + ':' + p.to;
+      if (!samples[key]) samples[key] = [];
+      samples[key].push(p.rate);
+    });
+  });
+
+  function avg(arr) { return arr && arr.length ? arr.reduce(function(s,v){return s+v;},0)/arr.length : null; }
+
+  // Get average rate A->B using direct samples or inverse
+  function getRate(a, b) {
+    var direct = avg(samples[a + ':' + b]);
+    if (direct !== null) return direct;
+    var inv = avg(samples[b + ':' + a]);
+    if (inv !== null && inv > 0) return 1 / inv;
+    return null;
+  }
+
+  var ALL_RES = ['econ','military','defence','food','happiness','stability'];
+
+  // Try to resolve eco->target by chaining through any single pivot
+  function resolveViaChain(target) {
+    var pivots = ALL_RES.filter(function(r) { return r !== 'econ' && r !== target; });
+    for (var i = 0; i < pivots.length; i++) {
+      var pivot = pivots[i];
+      var ecoToPivot = getRate('econ', pivot);
+      if (ecoToPivot === null) continue;
+      var pivotToTarget = getRate(pivot, target);
+      if (pivotToTarget !== null) return ecoToPivot * pivotToTarget;
+    }
+    return null;
+  }
+
+  var rates = {};
+  var isDefault = {};
+
+  ECO_RATE_RESOURCES.forEach(function(res) {
+    // 1. Direct eco->res
+    var r = getRate('econ', res);
+    if (r !== null) { rates[res] = r; isDefault[res] = false; return; }
+
+    // 2. Chain through any available pivot
+    r = resolveViaChain(res);
+    if (r !== null) { rates[res] = r; isDefault[res] = false; return; }
+
+    // 3. Use default eco->mil rate as anchor, then apply any market mil->res rate
+    if (res !== 'military') {
+      var milToRes = getRate('military', res);
+      if (milToRes !== null) {
+        rates[res] = ECO_DEFAULT_RATES['military'] * milToRes;
+        isDefault[res] = false;
+        return;
+      }
+    }
+
+    // 4. Pure default
+    rates[res] = ECO_DEFAULT_RATES[res];
+    isDefault[res] = true;
+  });
+
+  var pairCounts = {};
+  ECO_RATE_RESOURCES.forEach(function(res) {
+    pairCounts[res] = (samples['econ:'+res]||[]).length + (samples[res+':econ']||[]).length;
+  });
+
+  return { rates: rates, isDefault: isDefault, offerCount: offers.length, pairCounts: pairCounts, samples: samples };
+}
+
+function renderEcoRates() {
+  var grid = document.getElementById('mktEcoRatesGrid');
+  var basis = document.getElementById('mktEcoRatesBasis');
+  if (!grid) return;
+
+  var result = computeEcoConversionRates();
+  var rates = result.rates;
+
+  grid.innerHTML = ECO_RATE_RESOURCES.map(function(res) {
+    var meta = ECO_RATE_META[res];
+    var rate = rates[res];
+    var r = Math.round(rate * 1000) / 1000;
+    var rateStr = '1 : ' + r;
+    var def = result.isDefault[res];
+
+    return '<div style="background:var(--color-background-secondary);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);padding:14px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;">' +
+      '<div style="position:absolute;top:0;left:0;width:3px;height:100%;background:' + meta.color + ';"></div>' +
+      '<div style="padding-left:8px;">' +
+        '<div style="font-size:11px;font-weight:700;color:' + meta.color + ';text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Eco : ' + meta.label + '</div>' +
+        '<div style="font-size:24px;font-weight:700;color:var(--color-text-primary);font-family:\'IBM Plex Mono\',monospace;letter-spacing:-0.5px;">' + rateStr + '</div>' +
+        '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">1 Eco = ' + r + ' ' + meta.label + (def ? ' <span style="opacity:0.5;">(default)</span>' : '') + '</div>' +
+      '</div>' +
+      '<button onclick="ecoConvertQuick(\'' + res + '\',' + r + ')" style="margin-left:8px;padding:6px 0;font-family:inherit;font-size:12px;font-weight:700;color:' + meta.color + ';background:rgba(0,0,0,0.2);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);cursor:pointer;width:calc(100% - 8px);">Convert at this rate</button>' +
+    '</div>';
+  }).join('');
+
+  if (basis) {
+    var defCount = ECO_RATE_RESOURCES.filter(function(r){ return result.isDefault[r]; }).length;
+    var milSamples = (result.samples['econ:military']||[]).concat((result.samples['military:econ']||[]).map(function(v){return 1/v;}));
+    var parts = [];
+    if (result.offerCount > 0) parts.push(result.offerCount + ' open offer' + (result.offerCount!==1?'s':''));
+    if (milSamples.length > 0) {
+      var avg_raw = milSamples.reduce(function(s,v){return s+v;},0)/milSamples.length;
+      parts.push('Eco→Military anchor: ' + Math.round(avg_raw*1000)/1000 + ' per Eco');
+    }
+    if (defCount > 0) parts.push(defCount + ' rate' + (defCount!==1?'s':'') + ' using defaults');
+    basis.innerHTML = parts.length ? parts.join(' · ') : 'No market offers — showing default rates.';
+  }
+}
+
+// Quick-convert: prompt for eco amount, apply at market rate
+async function ecoConvertQuick(toResource, rate) {
+  var idx = findAssignedPlayerIdx();
+  if (idx < 0) { overlordAlert('No player assigned to your account.'); return; }
+  var player = workingNations[idx];
+  var curEco = parseFloat(player.econ) || 0;
+  var meta = ECO_RATE_META[toResource];
+
+  var ecoInput = prompt(
+    'Convert Eco → ' + meta.label + ' at rate 1 : ' + rate + '\n' +
+    'You have ' + curEco.toFixed(2) + ' Eco.\n\n' +
+    'How much Eco do you want to convert?'
+  );
+  if (ecoInput === null) return;
+  var ecoAmt = parseFloat(ecoInput);
+  if (isNaN(ecoAmt) || ecoAmt <= 0) { overlordAlert('Enter a valid positive number.'); return; }
+  if (ecoAmt > curEco) { overlordAlert('Not enough Eco. You have ' + curEco.toFixed(2) + '.'); return; }
+
+  var gain = Math.round(ecoAmt * rate * 1000) / 1000;
+
+  var PCT_STATS = ['food','happiness','stability'];
+  await performActionWithRefresh('Eco → ' + meta.label + ' conversion (market rate)', function() {
+    var p = workingNations[idx];
+    p.econ = String(Math.round((parseFloat(p.econ) - ecoAmt) * 1000) / 1000);
+    if (PCT_STATS.includes(toResource)) {
+      var cur = parseFloat(p[toResource]) || 0;
+      // normalise: stored as fraction (0-1) or pct (0-100)
+      var curPct = cur <= 1.0 ? cur * 100 : cur;
+      var newPct = Math.min(100, Math.round((curPct + gain) * 1000) / 1000);
+      p[toResource] = cur <= 1.0 ? String(newPct / 100) : String(newPct);
+    } else {
+      p[toResource] = String(Math.round(((parseFloat(p[toResource]) || 0) + gain) * 1000) / 1000);
+    }
+    addToLog('Market conversion: ' + getWN(idx) + ' — ' + ecoAmt + ' eco → ' + gain + ' ' + meta.label + ' (rate 1:' + rate + ')');
+  });
+  if (typeof renderActionsTab === 'function') renderActionsTab();
+  showToast('Converted ' + ecoAmt + ' Eco → ' + gain + ' ' + meta.label, 'success');
+}
+
+function refreshEcoRates() {
+  renderEcoRates();
+  showAdminToast && showAdminToast('Market rates refreshed', 'success');
+}
+
+window.refreshEcoRates = refreshEcoRates;
+window.renderEcoRates = renderEcoRates;
+window.computeEcoConversionRates = computeEcoConversionRates;
+window.ecoConvertQuick = ecoConvertQuick;
 </script>
 
 <!-- ═══════════ CHAT TAB ═══════════ -->
