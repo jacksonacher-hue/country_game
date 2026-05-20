@@ -351,6 +351,8 @@ function setAdminAuthUI(user) {
     registerUserInFirebase(user);
     loadRegisteredUsersIntoDropdown();
     if (typeof loadChatLastSeenFromCookie === 'function') loadChatLastSeenFromCookie();
+    // Load alliance GCs the player is already in
+    setTimeout(function() { if (typeof subscribeAllianceGcs === 'function') subscribeAllianceGcs(); }, 1500);
     // Check if automatic daily update needs to run
     setTimeout(function() {
       if (typeof checkAndRunAutomaticUpdates === 'function') checkAndRunAutomaticUpdates();
@@ -2125,6 +2127,7 @@ function loadUserAssignments() {
         if (typeof populateChatDmDropdown === 'function') populateChatDmDropdown();
         if (typeof renderChatSidebar === 'function') renderChatSidebar();
         if (typeof updateEspionageTabVisibility === 'function') updateEspionageTabVisibility();
+        if (typeof subscribeAllianceGcs === 'function') subscribeAllianceGcs();
       }, function(error) {
         console.error('[LOAD] onValue error (likely a Firebase security rules denial):', error.code, error.message);
       });
@@ -2861,6 +2864,98 @@ function getAllianceMemberIndices(idx) {
   });
   return members;
 }
+
+// ── ALLIANCE MEMBER COUNT ──
+var ALLIANCE_MAX_MEMBERS = 5;
+
+function getAllianceMemberCount(allianceName) {
+  if (!allianceName || !workingNations) return 0;
+  var normName = allianceName.trim().toLowerCase();
+  return workingNations.filter(function(n) {
+    if (!n.alliances) return false;
+    return n.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); }).includes(normName);
+  }).length;
+}
+
+// ── ALLIANCE GROUP CHAT SYNC ──
+// Channel ID for an alliance GC: alliance_<sanitized name>
+function allianceGcChannelId(allianceName) {
+  return 'alliance_' + allianceName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+// Add current user to an alliance GC (sends a system join message)
+async function joinAllianceGc(allianceName) {
+  var myEmail = chatGetMyEmail();
+  var myPlayer = chatGetMyPlayer();
+  if (!myEmail || !allianceName) return;
+  var channelId = allianceGcChannelId(allianceName);
+  var db = window.firebaseDb;
+  if (!db) return;
+  try {
+    // Post a system join message
+    var msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    await window.firebaseSet(window.firebaseRef(db, 'chat/' + channelId + '/' + msgId), {
+      id: msgId,
+      channel: channelId,
+      player: '⚔ System',
+      email: 'system',
+      text: myPlayer + ' has joined the alliance.',
+      ts: Date.now(),
+      system: true
+    });
+    // Add to open DMs / sidebar so user sees it
+    if (!chatOpenDms.includes(channelId)) chatOpenDms.push(channelId);
+    if (!chatMessagesCache[channelId]) chatMessagesCache[channelId] = [];
+    if (typeof renderChatSidebar === 'function') renderChatSidebar();
+    if (chatCurrentChannel === channelId && typeof renderChatMessages === 'function') renderChatMessages();
+  } catch(e) { console.warn('[ALLIANCE GC] joinAllianceGc failed', e); }
+}
+
+// Remove current user from an alliance GC (sends a system leave message)
+async function leaveAllianceGc(allianceName) {
+  var myEmail = chatGetMyEmail();
+  var myPlayer = chatGetMyPlayer();
+  if (!myEmail || !allianceName) return;
+  var channelId = allianceGcChannelId(allianceName);
+  var db = window.firebaseDb;
+  if (!db) return;
+  try {
+    var msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    await window.firebaseSet(window.firebaseRef(db, 'chat/' + channelId + '/' + msgId), {
+      id: msgId,
+      channel: channelId,
+      player: '⚔ System',
+      email: 'system',
+      text: myPlayer + ' has left the alliance.',
+      ts: Date.now(),
+      system: true
+    });
+    // Remove from sidebar
+    chatOpenDms = chatOpenDms.filter(function(id){ return id !== channelId; });
+    if (chatCurrentChannel === channelId) {
+      if (typeof switchChatChannel === 'function') switchChatChannel('global');
+    }
+    if (typeof renderChatSidebar === 'function') renderChatSidebar();
+  } catch(e) { console.warn('[ALLIANCE GC] leaveAllianceGc failed', e); }
+}
+
+// Subscribe to alliance GCs the current player is in (called on login / data load)
+function subscribeAllianceGcs() {
+  var myEmail = chatGetMyEmail();
+  var myName = chatGetMyPlayer();
+  if (!myEmail || !workingNations) return;
+  var assignedIdx = findAssignedPlayerIdx ? findAssignedPlayerIdx() : -1;
+  if (assignedIdx < 0) return;
+  var myNation = workingNations[assignedIdx];
+  if (!myNation || !myNation.alliances) return;
+  var myAlliances = myNation.alliances.split(',').map(function(a){ return a.trim(); }).filter(function(a){ return a && a !== '—' && a.toLowerCase() !== 'none'; });
+  myAlliances.forEach(function(alName) {
+    var channelId = allianceGcChannelId(alName);
+    if (!chatOpenDms.includes(channelId)) chatOpenDms.push(channelId);
+  });
+  if (typeof renderChatSidebar === 'function') renderChatSidebar();
+}
+window.subscribeAllianceGcs = subscribeAllianceGcs;
 
 function arePlayersInTruce(idxA, idxB) {
   var nameA = getWN(idxA);
@@ -3652,6 +3747,8 @@ async function leaveAllianceAction() {
     addToLog(playerName + ' left alliance: ' + allianceName);
     refreshAutoDropdowns();
   });
+  // Leave the alliance GC
+  try { await leaveAllianceGc(allianceName); } catch(e) { console.warn('[ALLIANCE GC] leave failed', e); }
   showToast(playerName + ' has left ' + allianceName + '.', 'success');
   renderActionsTab();
 }
@@ -3680,6 +3777,10 @@ async function createAddToAllianceRequestAction() {
   }
   if (existing.length) {
     overlordAlert(targetName + ' is already in another alliance (' + existing.join(', ') + '). They must leave it first.'); return;
+  }
+  var currentCount = getAllianceMemberCount(allianceName);
+  if (currentCount >= ALLIANCE_MAX_MEMBERS) {
+    overlordAlert('Alliance "' + allianceName + '" is full (' + ALLIANCE_MAX_MEMBERS + '/' + ALLIANCE_MAX_MEMBERS + ' members). A member must leave first.'); return;
   }
   var myEmail = window.firebaseAuth.currentUser.email.toLowerCase();
   var targetEmail = getAssignedEmailForName(targetName).toLowerCase();
@@ -3845,6 +3946,24 @@ async function processAllianceRequest(req) {
     renderActionsTab();
     return false;
   }
+  // Check member cap
+  var existingCount = getAllianceMemberCount(allianceName);
+  var newJoiners = members.filter(function(m) {
+    var normM = normalizeName(m);
+    return !workingNations.some(function(n) {
+      var full = normalizeName((n.first_name + ' ' + n.surname).trim());
+      if (full !== normM) return false;
+      var als = (n.alliances || '').split(',').map(function(a){ return a.trim().toLowerCase(); });
+      return als.includes(allianceName.toLowerCase());
+    });
+  });
+  if (existingCount + newJoiners.length > ALLIANCE_MAX_MEMBERS) {
+    overlordAlert('Alliance "' + allianceName + '" would exceed the maximum of ' + ALLIANCE_MAX_MEMBERS + ' members (' + existingCount + ' current + ' + newJoiners.length + ' joining = ' + (existingCount + newJoiners.length) + ').');
+    req.status = 'declined';
+    await savePlayerRequestsToFirebase();
+    renderActionsTab();
+    return false;
+  }
   var result = await performActionWithRefresh('Form alliance', function() {
     workingNations.forEach(function(n) {
       var full = normalizeName((n.first_name + ' ' + n.surname).trim());
@@ -3861,6 +3980,10 @@ async function processAllianceRequest(req) {
     showToast('Alliance could not be saved — no game data loaded. Load data from the Data tab first.', 'error');
     return false;
   }
+  // Join the alliance GC
+  try { await joinAllianceGc(allianceName); } catch(e) { console.warn('[ALLIANCE GC] join failed', e); }
+  // Subscribe sidebar to show the GC
+  if (typeof subscribeAllianceGcs === 'function') subscribeAllianceGcs();
   return true;
 }
 
@@ -6267,6 +6390,7 @@ async function endWar() {
 
 async function removeAllianceUpdate() {
   if (!confirm('Confirm removing this alliance?')) return;
+  var _dissolvedName = document.getElementById('allianceRemoveSelect') ? document.getElementById('allianceRemoveSelect').value : '';
   await performActionWithRefresh('Remove alliance', function() {
     var name = document.getElementById('allianceRemoveSelect').value;
     if (!name) return false;
@@ -6298,6 +6422,18 @@ async function removeAllianceUpdate() {
     addToLog('Alliance removed: ' + name + ' (from ' + count + ' players).' + truceLog);
     refreshAutoDropdowns();
   });
+  // Post dissolution message to alliance GC
+  if (_dissolvedName) {
+    try {
+      var _gcIdDis = allianceGcChannelId(_dissolvedName);
+      var _dbDis = window.firebaseDb;
+      var _msgIdDis = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+      await window.firebaseSet(window.firebaseRef(_dbDis, 'chat/' + _gcIdDis + '/' + _msgIdDis), {
+        id: _msgIdDis, channel: _gcIdDis, player: '⚔ System', email: 'system',
+        text: 'The alliance "' + _dissolvedName + '" has been dissolved by the admin.', ts: Date.now(), system: true
+      });
+    } catch(e) { console.warn('[ALLIANCE GC] dissolve msg failed', e); }
+  }
 }
 
 // ── ALLIANCE WAR START ──
@@ -6331,6 +6467,11 @@ async function addPlayerToAlliance() {
     var existing = (p.alliances || '').split(',').map(function(a){return a.trim();}).filter(function(a){return a && a!=='—' && a.toLowerCase()!=='none';});
     if (existing.length > 0) {
       overlordAlert(getWN(pIdx) + ' is already in an alliance (' + existing.join(', ') + '). Remove them first.');
+      return false;
+    }
+    var currentCount = getAllianceMemberCount(aName);
+    if (currentCount >= ALLIANCE_MAX_MEMBERS) {
+      overlordAlert('Alliance "' + aName + '" is full (' + ALLIANCE_MAX_MEMBERS + '/' + ALLIANCE_MAX_MEMBERS + ' members). Remove a member first.');
       return false;
     }
     p.alliances = aName;
@@ -6368,10 +6509,31 @@ async function addPlayerToAlliance() {
 
     return true;
   });
+  // Post a system message to the alliance GC (admin path)
+  try {
+    var _addedPIdx2 = parseInt(document.getElementById('allianceAddPlayerSel') ? document.getElementById('allianceAddPlayerSel').value : -1);
+    var _addedAName2 = document.getElementById('allianceAddNameSel') ? document.getElementById('allianceAddNameSel').value : '';
+    if (!isNaN(_addedPIdx2) && _addedAName2) {
+      var _gcId2 = allianceGcChannelId(_addedAName2);
+      var _db2 = window.firebaseDb;
+      var _msgId2 = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+      var _playerName2 = getWN(_addedPIdx2);
+      await window.firebaseSet(window.firebaseRef(_db2, 'chat/' + _gcId2 + '/' + _msgId2), {
+        id: _msgId2, channel: _gcId2, player: '⚔ System', email: 'system',
+        text: _playerName2 + ' has joined the alliance.', ts: Date.now(), system: true
+      });
+    }
+  } catch(e) { console.warn('[ALLIANCE GC] admin add GC msg failed', e); }
 }
 
 async function removePlayerFromAlliance() {
   if (!confirm('Confirm removing this player from their alliance?')) return;
+  // Capture alliances before clearing so we can post GC leave messages
+  var _remPIdxPre = parseInt(document.getElementById('allianceRemovePlayerSel') ? document.getElementById('allianceRemovePlayerSel').value : -1);
+  var _remAlliancesPre = (!isNaN(_remPIdxPre) && workingNations[_remPIdxPre])
+    ? (workingNations[_remPIdxPre].alliances || '').split(',').map(function(a){return a.trim();}).filter(function(a){return a && a !== '—' && a.toLowerCase() !== 'none';})
+    : [];
+  var _remNamePre = !isNaN(_remPIdxPre) ? getWN(_remPIdxPre) : '';
   await performActionWithRefresh('Remove player from alliance', function() {
     var pIdx = parseInt(document.getElementById('allianceRemovePlayerSel').value);
     if (isNaN(pIdx)) { overlordAlert('Select a player.'); return false; }
@@ -6405,6 +6567,20 @@ async function removePlayerFromAlliance() {
     addToLog(logMessage);
     return true;
   });
+  // Post system leave messages to alliance GC(s) (admin path)
+  if (_remAlliancesPre.length && _remNamePre) {
+    for (var _i = 0; _i < _remAlliancesPre.length; _i++) {
+      try {
+        var _gcIdRem = allianceGcChannelId(_remAlliancesPre[_i]);
+        var _dbRem = window.firebaseDb;
+        var _msgIdRem = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+        await window.firebaseSet(window.firebaseRef(_dbRem, 'chat/' + _gcIdRem + '/' + _msgIdRem), {
+          id: _msgIdRem, channel: _gcIdRem, player: '⚔ System', email: 'system',
+          text: _remNamePre + ' has left the alliance.', ts: Date.now(), system: true
+        });
+      } catch(e) { console.warn('[ALLIANCE GC] admin remove GC msg failed', e); }
+    }
+  }
 }
 
 // ── ADD/REMOVE PLAYER FROM WAR ──
@@ -6570,6 +6746,7 @@ function createAllianceUpdate() {
   var selected = [];
   document.querySelectorAll('#allianceCreatePlayers input:checked').forEach(function(cb) { selected.push(parseInt(cb.value)); });
   if (!selected.length) { overlordAlert('Select at least one player.'); return; }
+  if (selected.length > ALLIANCE_MAX_MEMBERS) { overlordAlert('An alliance can have at most ' + ALLIANCE_MAX_MEMBERS + ' members. You selected ' + selected.length + '.'); return; }
   var errors = [];
   selected.forEach(function(idx) {
     var p = workingNations[idx];
@@ -10812,18 +10989,26 @@ function subscribeChat() {
     renderChatMessages();
   });
 
-  // Also listen to ALL DM channels involving me for unread badge updates
+  // Also listen to ALL DM channels involving me + alliance GCs I'm in
   // We subscribe to all chat/ children and filter
   var allChatRef = window.firebaseRef(db, 'chat');
   window.firebaseOnValue(allChatRef, function(snap) {
     var data = snap.val() || {};
+    // Determine my alliance GC channel IDs
+    var myAllianceChannels = [];
+    var _assignedIdx = (typeof findAssignedPlayerIdx === 'function') ? findAssignedPlayerIdx() : -1;
+    if (_assignedIdx >= 0 && workingNations && workingNations[_assignedIdx]) {
+      var _myAls = (workingNations[_assignedIdx].alliances || '').split(',').map(function(a){ return a.trim(); }).filter(function(a){ return a && a !== '—' && a.toLowerCase() !== 'none'; });
+      myAllianceChannels = _myAls.map(function(a){ return allianceGcChannelId(a); });
+    }
     Object.keys(data).forEach(function(channelId) {
-      if (channelId.startsWith('dm_') && channelId.includes(myEmail.replace(/[@.]/g, '_'))) {
+      var isDm = channelId.startsWith('dm_') && channelId.includes(myEmail.replace(/[@.]/g, '_'));
+      var isMyAllianceGc = myAllianceChannels.includes(channelId);
+      if (isDm || isMyAllianceGc) {
         var msgs = Object.values(data[channelId] || {});
         msgs.sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
         chatMessagesCache[channelId] = msgs;
         if (typeof maybeSendChatNotif === 'function') maybeSendChatNotif(channelId, msgs);
-        // Open this DM in sidebar if not already there
         if (!chatOpenDms.includes(channelId)) chatOpenDms.push(channelId);
       }
     });
@@ -11009,10 +11194,21 @@ function renderChatSidebar() {
 
   dmList.innerHTML = chatOpenDms.map(function(channelId) {
     var isActive = chatCurrentChannel === channelId;
-    var partnerName = getDmPartnerName(channelId);
+    var isAllianceGc = channelId.startsWith('alliance_');
+    var partnerName, dotColor, labelPrefix;
+    if (isAllianceGc) {
+      // Pretty-print the alliance name from the channel ID
+      partnerName = channelId.replace(/^alliance_/, '').replace(/_/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+      dotColor = '#f59e0b'; // amber for alliance
+      labelPrefix = '⚔ ';
+    } else {
+      partnerName = getDmPartnerName(channelId);
+      dotColor = chatPlayerColor(partnerName);
+      labelPrefix = '';
+    }
     var msgs = chatMessagesCache[channelId] || [];
     var unread = (window._chatUnreadByChannel && window._chatUnreadByChannel[channelId]) || 0;
-    var dotColor = chatPlayerColor(partnerName);
+    if (isAllianceGc) { dotColor = '#f59e0b'; } else { dotColor = chatPlayerColor(partnerName); }
     var lastMsg = msgs.length ? msgs[msgs.length-1] : null;
     var preview = lastMsg ? lastMsg.text.slice(0,28) + (lastMsg.text.length > 28 ? '…' : '') : 'No messages yet';
 
@@ -11040,6 +11236,10 @@ function renderChatMessages() {
     if (chatCurrentChannel === 'global') {
       header.textContent = '# Global';
       if (subtitle) subtitle.textContent = 'Everyone can see this';
+    } else if (chatCurrentChannel.startsWith('alliance_')) {
+      var gcAllianceName = chatCurrentChannel.replace(/^alliance_/, '').replace(/_/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+      header.textContent = '⚔ ' + gcAllianceName;
+      if (subtitle) subtitle.textContent = 'Alliance GC · visible to espionage';
     } else {
       var partnerName = getDmPartnerName(chatCurrentChannel);
       header.textContent = '@ ' + partnerName;
@@ -11069,6 +11269,14 @@ function renderChatMessages() {
       return 'Unknown';
     })();
     var dotColor = chatPlayerColor(resolvedName);
+    // System messages get special styling
+    if (msg.system) {
+      html += '<div style=\"text-align:center;margin:6px 0;\">' +
+        '<span style=\"font-size:11px;color:var(--color-text-tertiary);font-style:italic;\">⚔ ' + esc(msg.text) + '</span>' +
+      '</div>';
+      prevPlayer = null; // force header re-render after system msg
+      return;
+    }
     var date = msg.ts ? new Date(msg.ts).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
     var time = msg.ts ? new Date(msg.ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '';
     var showHeader = resolvedName !== prevPlayer;
@@ -11180,7 +11388,8 @@ function showChatNotifPopup(channelId, msg) {
     return 'Someone';
   })();
   var isDm = channelId.startsWith('dm_');
-  var chanLabel = isDm ? ('DM from '+senderName) : '# Global';
+  var isAllianceGcNotif = channelId.startsWith('alliance_');
+  var chanLabel = isDm ? ('DM from '+senderName) : isAllianceGcNotif ? ('⚔ ' + channelId.replace(/^alliance_/, '').replace(/_/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); })) : '# Global';
   var dotColor = typeof stringToColor==='function' ? stringToColor(senderName) : '#888';
   var preview = (msg.text||'').slice(0,90)+((msg.text||'').length>90?'…':'');
   var nid = 'cn_'+channelId.replace(/[^a-z0-9]/gi,'_');
