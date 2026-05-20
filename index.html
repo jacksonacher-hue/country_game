@@ -1717,14 +1717,6 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
         <!-- Spend Eco Points -->
         <div class="auto-sub-title">Spend Eco Points</div>
 
-        <div style="font-size:12px;font-weight:500;color:var(--color-text-tertiary);margin-bottom:6px;">Create Subsidy (5% per day for 5 days)</div>
-        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:12px;">
-          <div><label class="auto-label">Player</label><select id="subsidyPlayer" style="padding:8px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);min-width:140px;"></select></div>
-          <div><label class="auto-label">Eco pts</label><input type="number" id="subsidyEco" value="1" min="1" style="width:70px;padding:8px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);"></div>
-          <div><label class="auto-label">Stat</label><select id="subsidyStat" style="padding:8px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);min-width:100px;"><option>food</option><option>stability</option><option>happiness</option></select></div>
-          <button onclick="createSubsidy()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fff;background:#1D9E75;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Create</button>
-        </div>
-
         <hr style="border:none;border-top:0.5px solid var(--color-border-tertiary);margin:16px 0;">
 
         <div class="auto-sub-title">War Start</div>
@@ -2563,24 +2555,6 @@ function renderActionsTab() {
           Economy & Resources
         </div>
         <div style="display:grid;gap:14px;">
-
-          <!-- Subsidy -->
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--color-text-secondary);margin-bottom:8px;">Create Subsidy (Eco → Stat)</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;">
-              <div class="action-field"><label>Eco Amount</label><input id="actionsSubsidyEco" type="number" min="1" value="1"></div>
-              <div class="action-field"><label>Convert to</label>
-                <select id="actionsSubsidyStat">
-                  <option value="food">Food</option>
-                  <option value="happiness">Happiness</option>
-                  <option value="stability">Stability</option>
-                  <option value="military">Military</option>
-                  <option value="defence">Defence</option>
-                </select>
-              </div>
-              <button class="action-btn primary" onclick="performSubsidyAction()">Subsidise</button>
-            </div>
-          </div>
 
           <!-- Give resources -->
           <div>
