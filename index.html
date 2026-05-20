@@ -3724,7 +3724,19 @@ let playerRequests = [];
 async function loadPlayerRequestsFromFirebase() {
   try {
     var ref = window.firebaseRef(window.firebaseDb, 'playerRequests');
-    var snap = await window.firebaseGet(ref);
+    var snap = await window.firebaseGet ? window.firebaseGet(ref) : null;
+    if (!snap) {
+      // Fallback: use firebase get via already imported get
+      var db = window.firebaseDb;
+      var reqRef = window.firebaseRef(db, 'playerRequests');
+      playerRequests = [];
+      window.firebaseOnValue(reqRef, function(snapshot) {
+        var data = snapshot.val();
+        playerRequests = data ? Object.values(data) : [];
+        renderPlayerRequests();
+      });
+      return;
+    }
     playerRequests = snap.exists() ? Object.values(snap.val()) : [];
     renderPlayerRequests();
   } catch(e) {
@@ -4164,7 +4176,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
     // Actions tab: re-render and subscribe to live Firebase request updates
     if (tabName === 'actions') {
-      if (isLockedOut()) { applyLockoutState(); }
+      if (isInLockoutPeriod()) { applyLockoutState(); }
       else { renderActionsTab(); subscribePlayerRequests(); }
     }
     // History tab: subscribe to live game log
@@ -4183,7 +4195,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     }
     // Chat tab
     if (tabName === 'chat') {
-      if (isLockedOut()) { applyLockoutState(); return; }
+      if (isInLockoutPeriod()) { applyLockoutState(); return; }
       renderChatTab();
       subscribeChat();
       var _nowMsgs = chatMessagesCache[chatCurrentChannel] || [];
@@ -11863,38 +11875,11 @@ function buildLockoutHTML(countdownId) {
   '</div>';
 }
 
-// ── Cached lockout state — checked once at startup, then updated only by the tick ──
-var _lockoutCached = null; // null = not yet initialised
-var _lockoutOverride = null; // null = no override; true/false = admin override
-
-function _initLockoutCache() {
-  _lockoutCached = isInLockoutPeriod();
-}
-
-// Fast path used everywhere except the tick itself
-function isLockedOut() {
-  if (_lockoutOverride !== null) return _lockoutOverride;
-  if (_lockoutCached === null) _initLockoutCache();
-  return _lockoutCached;
-}
-
-// Console shortcut: type  locked=false  or  locked=true  to override
-Object.defineProperty(window, 'locked', {
-  get: function() { return isLockedOut(); },
-  set: function(val) {
-    _lockoutOverride = !!val;
-    applyLockoutState();
-    console.log('[LOCKOUT] Override set → locked=' + _lockoutOverride);
-  },
-  configurable: true
-});
-
 var _lockoutTickInterval = null;
 
 function _lockoutTick() {
   if (!isInLockoutPeriod()) {
-    // Window just ended — lift lockout, update cache
-    _lockoutCached = false;
+    // Window just ended — lift lockout
     clearInterval(_lockoutTickInterval); _lockoutTickInterval = null;
     applyLockoutState();
     return;
@@ -11914,7 +11899,7 @@ function _lockoutTick() {
 }
 
 function applyLockoutState() {
-  var locked = isLockedOut();
+  var locked = isInLockoutPeriod();
   console.log('[LOCKOUT] applyLockoutState called, locked=' + locked);
 
   // ── Chat ──
@@ -11957,7 +11942,7 @@ function applyLockoutState() {
 // Block sending during lockout
 var _origSendChatMessage = window.sendChatMessage;
 window.sendChatMessage = function() {
-  if (isLockedOut()) {
+  if (isInLockoutPeriod()) {
     if (typeof overlordAlert === 'function') overlordAlert('Chat is closed until 2:50 PM Sydney time.');
     return;
   }
@@ -11967,7 +11952,7 @@ window.sendChatMessage = function() {
 // Block subscribeChat during lockout (no point opening Firebase listeners)
 var _origSubscribeChat = window.subscribeChat;
 window.subscribeChat = function() {
-  if (isLockedOut()) { applyLockoutState(); return; }
+  if (isInLockoutPeriod()) { applyLockoutState(); return; }
   return _origSubscribeChat.apply(this, arguments);
 };
 
@@ -11977,7 +11962,7 @@ function _updateLockoutHud() {
   if (!hud) return;
   var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
-  var locked = isLockedOut();
+  var locked = isInLockoutPeriod();
   var nowMins = t.h * 60 + t.m;
   var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
   var endMins = LOCKOUT_END_H * 60 + LOCKOUT_END_M;
@@ -11996,8 +11981,7 @@ console.log('[LOCKOUT] Initialising. Sydney time:', (function(){
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
   return pad(t.h)+':'+pad(t.m)+':'+pad(t.s);
 })());
-_initLockoutCache(); // check once, cache result
-console.log('[LOCKOUT] isInLockoutPeriod:', _lockoutCached);
+console.log('[LOCKOUT] isInLockoutPeriod:', isInLockoutPeriod());
 console.log('[LOCKOUT] LOCKOUT_START:', LOCKOUT_START_H + ':' + (LOCKOUT_START_M < 10 ? '0' : '') + LOCKOUT_START_M,
             '| LOCKOUT_END:', LOCKOUT_END_H + ':' + (LOCKOUT_END_M < 10 ? '0' : '') + LOCKOUT_END_M);
 
@@ -12005,7 +11989,7 @@ applyLockoutState();
 
 // HUD ticks every second; lockout state re-checked every 30s
 setInterval(_updateLockoutHud, 1000);
-setInterval(function() { _lockoutCached = isInLockoutPeriod(); applyLockoutState(); }, 60000);
+setInterval(applyLockoutState, 60000);
 _updateLockoutHud();
 // ══════════════════════════════════════════════════════
 </script>
