@@ -13,6 +13,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
 <script>
 // ═══════════════════════════════
 // FIREBASE CONFIG
@@ -2482,6 +2483,24 @@ function renderActionsTab() {
         <div id="playerColorPreview" style="width:18px;height:18px;border-radius:4px;border:1px solid var(--color-border-primary);background:transparent;margin-left:6px;"></div>
       </div>
 
+      <!-- Nation flag upload -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div style="font-size:12px;font-weight:600;color:var(--color-text-secondary);min-width:120px;">Nation Flag</div>
+        <label id="flagUploadLabel" style="display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border:1px solid var(--color-border-primary);border-radius:6px;background:var(--color-background-secondary);color:var(--color-text-primary);font-size:13px;cursor:pointer;font-family:inherit;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Choose image
+          <input type="file" id="flagFileInput" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" style="display:none;" onchange="handleFlagFileSelected(this)">
+        </label>
+        <span id="flagFileName" style="font-size:12px;color:var(--color-text-tertiary);">No file chosen</span>
+        <button id="flagUploadBtn" onclick="uploadPlayerFlag()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:600;color:#fff;background:#7c3aed;border:none;border-radius:6px;cursor:pointer;display:none;">🏴 Upload Flag</button>
+        <button id="flagClearBtn" onclick="clearPlayerFlag()" style="padding:8px 12px;font-family:inherit;font-size:12px;font-weight:500;color:var(--color-text-secondary);background:var(--color-background-tertiary);border:1px solid var(--color-border-primary);border-radius:6px;cursor:pointer;display:none;">Remove Flag</button>
+      </div>
+      <div id="flagUploadStatus" style="font-size:12px;margin-top:-6px;margin-left:128px;display:none;"></div>
+      <div id="flagPreviewRow" style="display:none;align-items:center;gap:10px;margin-left:128px;margin-top:-4px;">
+        <img id="flagPreviewImg" src="" alt="Current flag" style="height:36px;width:60px;object-fit:cover;border-radius:4px;border:2px solid var(--color-border-primary);">
+        <span style="font-size:11px;color:var(--color-text-tertiary);">Current flag — visible on map</span>
+      </div>
+
 
       <!-- ══ BATTLE ══ -->
       <div class="actions-card">
@@ -2687,6 +2706,37 @@ function actionsPreviewBattle() {
   }
   atkEl.innerHTML = renderSide(sides[0]);
   defEl.innerHTML = renderSide(sides[1]);
+
+  // ── Check cooldown and update battle button state ──
+  var battleBtn = document.querySelector('[onclick="performInitiateBattleAction()"]');
+  var resultEl = document.getElementById('actionsBattleResult');
+  if (!battleBtn) return;
+  var cdKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  window.firebaseGet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + cdKey)).then(function(snap) {
+    if (snap.exists()) {
+      var cdData = snap.val();
+      var elapsed = Date.now() - (cdData.lastBattle || 0);
+      var msPerDay = 24 * 60 * 60 * 1000;
+      if (elapsed < msPerDay) {
+        var msLeft = msPerDay - elapsed;
+        var hLeft = Math.floor(msLeft / 3600000);
+        var mLeft = Math.floor((msLeft % 3600000) / 60000);
+        var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
+        battleBtn.disabled = true;
+        battleBtn.style.opacity = '0.45';
+        battleBtn.style.cursor = 'not-allowed';
+        battleBtn.textContent = '⏳ Next battle in ' + timeStr;
+        if (resultEl) resultEl.innerHTML = '<div style="padding:14px 16px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.3);border-radius:var(--border-radius-lg);font-size:12px;color:var(--color-text-warning);">⏳ <strong>' + esc(cdData.rolledBy || 'Someone') + '</strong> already fought a battle in this war today. Next battle available in <strong>' + timeStr + '</strong>.</div>';
+        return;
+      }
+    }
+    // No cooldown — re-enable
+    battleBtn.disabled = false;
+    battleBtn.style.opacity = '';
+    battleBtn.style.cursor = '';
+    battleBtn.textContent = '⚡ ROLL BATTLE — Apply Full Consequences';
+    if (resultEl && resultEl.innerHTML.includes('already fought')) resultEl.innerHTML = '';
+  }).catch(function() {});
 }
 
 // Cede province action
@@ -3177,6 +3227,35 @@ async function performInitiateBattleAction() {
   var assigned = workingNations[idx];
   var warEntry = parseWarNames(assigned.wars).find(function(w) { return normalizeName(w.name) === normalizeName(warName); });
   if (!warEntry || warEntry.days < 1) { overlordAlert('This war must have been running at least one day.'); return; }
+
+  // ── Battle cooldown check (1 battle per war per day) ──
+  var cooldownKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  try {
+    var cdSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + cooldownKey));
+    if (cdSnap.exists()) {
+      var cdData = cdSnap.val();
+      var elapsed = Date.now() - (cdData.lastBattle || 0);
+      var msPerDay = 24 * 60 * 60 * 1000;
+      if (elapsed < msPerDay) {
+        var msLeft = msPerDay - elapsed;
+        var hLeft = Math.floor(msLeft / 3600000);
+        var mLeft = Math.floor((msLeft % 3600000) / 60000);
+        var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
+        var rolledBy = cdData.rolledBy || 'someone';
+        var resultEl = document.getElementById('actionsBattleResult');
+        if (resultEl) {
+          resultEl.innerHTML = '<div style="padding:16px 18px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-lg);display:flex;align-items:flex-start;gap:12px;">' +
+            '<span style="font-size:22px;line-height:1;">⏳</span>' +
+            '<div>' +
+              '<div style="font-size:13px;font-weight:700;color:var(--color-text-warning);margin-bottom:4px;">Battle already fought today</div>' +
+              '<div style="font-size:12px;color:var(--color-text-secondary);">A battle in <strong>' + esc(warName) + '</strong> was already rolled by <strong>' + esc(rolledBy) + '</strong>. You can fight again in <strong style="color:var(--color-text-warning);">' + timeStr + '</strong>.</div>' +
+            '</div>' +
+          '</div>';
+        }
+        return;
+      }
+    }
+  } catch(e) { console.warn('[BATTLE] Cooldown check failed', e); }
   var sides = getWarSides(warName);
   var attackerSide = warEntry.side;
   var defenderSide = attackerSide === 0 ? 1 : 0;
@@ -3230,6 +3309,19 @@ async function performInitiateBattleAction() {
     brObj.seenBy[rollerEmailKey] = true;
   }
   saveBattleResultToFirebase(brObj);
+
+  // ── Write battle cooldown ──
+  try {
+    var _cdKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    var _rollerEmail = (window.firebaseAuth && window.firebaseAuth.currentUser && window.firebaseAuth.currentUser.email) || 'unknown';
+    var _myName = getWN(idx);
+    await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + _cdKey), {
+      lastBattle: Date.now(),
+      warName: warName,
+      rolledBy: _myName || _rollerEmail
+    });
+  } catch(e) { console.warn('[BATTLE] Could not write cooldown', e); }
+  // ─────────────────────────────
   // ================================================
 
   // Build consequence panel — same logic as admin calculateBattleConsequences
