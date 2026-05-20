@@ -237,6 +237,7 @@ function populateWorkbookFromFirebaseData(data) {
     seaCrossingsData[weekName] = week.seaCrossings || [];
     nationSheetNames.push(nationSheet);
     provinceSheetNames.push(provinceSheet);
+    _firebaseNationsRaw = week.nations || []; // keep latest week's raw objects
   });
   currentWorkbook.SheetNames = nationSheetNames.concat(provinceSheetNames);
 
@@ -4217,6 +4218,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // FIREBASE LOADER (REPLACES EXCEL UPLOAD)
 // ═══════════════════════════════════════
 
+// Raw Firebase nation objects for the latest week — bypasses XLSX round-trip
+var _firebaseNationsRaw = [];
+
 function loadFromFirebase() {
   showUploadStatus('Loading Firebase…', 'loading');
   document.getElementById('error').style.display = 'none';
@@ -4235,7 +4239,9 @@ function loadFromFirebase() {
     nationSheetNames = [];
     provinceSheetNames = [];
     seaCrossingsData = {}; // Store sea crossings per week
+    _firebaseNationsRaw = []; // reset
 
+    const weekKeys = Object.keys(data);
     Object.keys(data).forEach((weekName) => {
       const week = data[weekName];
 
@@ -4293,6 +4299,9 @@ function loadFromFirebase() {
 
       nationSheetNames.push(nationSheet);
       provinceSheetNames.push(provinceSheet);
+
+      // Keep raw objects from the last (latest) week for direct use
+      _firebaseNationsRaw = week.nations || [];
     });
     currentWorkbook.SheetNames = nationSheetNames.concat(provinceSheetNames);
 
@@ -5998,7 +6007,7 @@ function initWorkingCopy() {
   weeklyUpdateRan = false;
   document.getElementById('autoWeekLabel').textContent = 'Working from: ' + latestNation;
 
-  // Deep clone nations
+  // Deep clone nations from XLSX-derived nationsData
   workingNations = nationsData.map(function(n) {
     var clone = {};
     NATION_COLS.forEach(function(c) { clone[c.key] = n[c.key] || ''; });
@@ -6006,6 +6015,19 @@ function initWorkingCopy() {
     NATION_COLS.forEach(function(c) { clone._raw[c.key] = n[c.key] || ''; });
     return clone;
   });
+
+  // Overlay raw Firebase fields directly — bypasses XLSX round-trip lossy encoding.
+  // This ensures string fields like alliances, wars, truced etc. are exactly as stored.
+  if (_firebaseNationsRaw.length === workingNations.length) {
+    _firebaseNationsRaw.forEach(function(raw, i) {
+      NATION_COLS.forEach(function(c) {
+        if (raw[c.key] != null && raw[c.key] !== '') {
+          workingNations[i][c.key] = String(raw[c.key]);
+          workingNations[i]._raw[c.key] = String(raw[c.key]);
+        }
+      });
+    });
+  }
 
   // Deep clone provinces
   workingProvinces = provincesData.map(function(p) {
