@@ -10536,8 +10536,11 @@ async function postMarketplaceOffer() {
 
   // Check we have enough of what we're giving
   var player = workingNations[idx];
+  var PCT_STATS = ['food', 'happiness', 'stability'];
   function checkHave(resource, amount) {
-    var val = parseFloat(player[resource === 'econ' ? 'econ' : resource]) || 0;
+    var raw = parseFloat(player[resource]) || 0;
+    // food/happiness/stability may be stored as 0.75 (=75%) or 75 — normalise to pct points
+    var val = (PCT_STATS.includes(resource) && raw <= 1.0) ? raw * 100 : raw;
     return val >= amount;
   }
   if (!checkHave(g1r, g1a)) { overlordAlert('You don\'t have enough ' + mktLabel(g1r) + ' to post this offer.'); return; }
@@ -10657,8 +10660,13 @@ async function acceptMarketplaceOffer(offerId) {
       return resource === 'econ' ? 'econ' : resource;
     }
 
+    var MKT_PCT = ['food', 'happiness', 'stability'];
+
+    // Returns the stat value normalised to the same scale as the amount field (pct = percentage points)
     function getStatVal(n, resource) {
-      return parseFloat(n[getStatKey(resource)]) || 0;
+      var raw = parseFloat(n[getStatKey(resource)]) || 0;
+      if (MKT_PCT.includes(resource) && raw <= 1.0) return raw * 100;
+      return raw;
     }
 
     // Validate after refresh (values may have changed)
@@ -10681,21 +10689,30 @@ async function acceptMarketplaceOffer(offerId) {
 
     function transferStat(from, to, resource, amount) {
       var key = getStatKey(resource);
-      var isPct = ['food','happiness','stability'].includes(resource);
-      var fVal = parseFloat(from[key]) || 0;
-      var tVal = parseFloat(to[key]) || 0;
-      // Detect decimal storage (e.g. 0.95 = 95%) vs raw (e.g. 95)
-      var isDecF = isPct && fVal <= 1 && !String(from[key]).includes('%');
-      var isDecT = isPct && tVal <= 1 && !String(to[key]).includes('%');
-      var transfer = isDecF ? amount / 100 : amount;
-      var newFrom = isDecF
-        ? Math.max(0, Math.round((fVal - transfer) * 10000) / 10000)
-        : Math.max(0, Math.round((fVal - amount) * 100) / 100);
-      var tTransfer = isDecT ? amount / 100 : amount;
-      var newTo = isDecT
-        ? Math.min(1, Math.round((tVal + tTransfer) * 10000) / 10000)
-        : Math.min(isPct ? 100 : 999999, Math.round((tVal + amount) * 100) / 100);
-      console.log('[MKT] transferStat:', resource, '| from', fVal, '->', newFrom, '| to', tVal, '->', newTo, '| isDecF:', isDecF, 'isDecT:', isDecT);
+      var isPct = MKT_PCT.includes(resource);
+      var fRaw = parseFloat(from[key]) || 0;
+      var tRaw = parseFloat(to[key]) || 0;
+      // Detect decimal storage: pct stat stored as 0..1 (e.g. 0.75 = 75%)
+      var fIsDecimal = isPct && fRaw <= 1.0;
+      var tIsDecimal = isPct && tRaw <= 1.0;
+      // amount is always in percentage-points (e.g. 5 = 5%)
+      var transferDecimal = amount / 100; // the delta in decimal form
+      var newFrom, newTo;
+      if (fIsDecimal) {
+        newFrom = Math.max(0, Math.round((fRaw - transferDecimal) * 100000) / 100000);
+      } else if (isPct) {
+        newFrom = Math.max(0, Math.round((fRaw - amount) * 100) / 100);
+      } else {
+        newFrom = Math.max(0, Math.round((fRaw - amount) * 100) / 100);
+      }
+      if (tIsDecimal) {
+        newTo = Math.min(1, Math.round((tRaw + transferDecimal) * 100000) / 100000);
+      } else if (isPct) {
+        newTo = Math.min(100, Math.round((tRaw + amount) * 100) / 100);
+      } else {
+        newTo = Math.round((tRaw + amount) * 100) / 100;
+      }
+      console.log('[MKT] transferStat:', resource, '| from', fRaw, '->', newFrom, '| to', tRaw, '->', newTo, '| fIsDecimal:', fIsDecimal, 'tIsDecimal:', tIsDecimal);
       from[key] = String(newFrom);
       to[key] = String(newTo);
     }
@@ -10893,6 +10910,10 @@ window.renderMarketplace = renderMarketplace;
           style="padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;border-left:3px solid var(--color-accent);color:var(--color-accent);background:var(--color-accent-dim);">
           # Global
         </div>
+
+        <!-- Alliance GC list -->
+        <div style="padding:10px 12px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--color-text-tertiary);margin-top:6px;">Alliance</div>
+        <div id="chatAllianceGcList" style="overflow-y:auto;max-height:140px;"></div>
 
         <!-- DM list -->
         <div style="padding:10px 12px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--color-text-tertiary);margin-top:6px;">Direct Messages</div>
@@ -11174,52 +11195,59 @@ function renderChatSidebar() {
   // Global channel highlight
   var globalEl = document.getElementById('chatChannelGlobal');
   if (globalEl) {
-    var isActive = chatCurrentChannel === 'global';
-    globalEl.style.borderLeftColor = isActive ? 'var(--color-accent)' : 'transparent';
-    globalEl.style.color = isActive ? 'var(--color-accent)' : 'var(--color-text-secondary)';
-    globalEl.style.background = isActive ? 'var(--color-accent-dim)' : 'transparent';
-    // Unread badge for global
+    var isActiveGlobal = chatCurrentChannel === 'global';
+    globalEl.style.borderLeftColor = isActiveGlobal ? 'var(--color-accent)' : 'transparent';
+    globalEl.style.color = isActiveGlobal ? 'var(--color-accent)' : 'var(--color-text-secondary)';
+    globalEl.style.background = isActiveGlobal ? 'var(--color-accent-dim)' : 'transparent';
     var globalUnread = (window._chatUnreadByChannel && window._chatUnreadByChannel['global']) || 0;
-    globalEl.innerHTML = '# Global' + (globalUnread > 0 && !isActive ? ' <span style="background:#ef4444;color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;font-weight:700;">' + globalUnread + '</span>' : '');
+    globalEl.innerHTML = '# Global' + (globalUnread > 0 && !isActiveGlobal ? ' <span style="background:#ef4444;color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;font-weight:700;">' + globalUnread + '</span>' : '');
   }
 
-  var dmList = document.getElementById('chatDmList');
-  if (!dmList) return;
-
-  var myEmail = chatGetMyEmail();
-  if (!chatOpenDms.length) {
-    dmList.innerHTML = '<div style="padding:8px 16px;font-size:12px;color:var(--color-text-tertiary);">No DMs yet</div>';
-    return;
-  }
-
-  dmList.innerHTML = chatOpenDms.map(function(channelId) {
+  // Helper: build a clickable channel row
+  function buildRow(channelId, label, dotColor) {
     var isActive = chatCurrentChannel === channelId;
-    var isAllianceGc = channelId.startsWith('alliance_');
-    var partnerName, dotColor, labelPrefix;
-    if (isAllianceGc) {
-      // Pretty-print the alliance name from the channel ID
-      partnerName = channelId.replace(/^alliance_/, '').replace(/_/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
-      dotColor = '#f59e0b'; // amber for alliance
-      labelPrefix = '⚔ ';
-    } else {
-      partnerName = getDmPartnerName(channelId);
-      dotColor = chatPlayerColor(partnerName);
-      labelPrefix = '';
-    }
     var msgs = chatMessagesCache[channelId] || [];
     var unread = (window._chatUnreadByChannel && window._chatUnreadByChannel[channelId]) || 0;
-    if (isAllianceGc) { dotColor = '#f59e0b'; } else { dotColor = chatPlayerColor(partnerName); }
     var lastMsg = msgs.length ? msgs[msgs.length-1] : null;
-    var preview = lastMsg ? lastMsg.text.slice(0,28) + (lastMsg.text.length > 28 ? '…' : '') : 'No messages yet';
-
+    var preview = lastMsg ? lastMsg.text.slice(0,28) + (lastMsg.text.length > 28 ? '\u2026' : '') : 'No messages yet';
     return '<div onclick="switchChatChannel(\'' + channelId + '\')" style="padding:10px 16px;cursor:pointer;border-left:3px solid ' + (isActive ? dotColor : 'transparent') + ';background:' + (isActive ? 'rgba(255,255,255,0.04)' : 'transparent') + ';transition:background 0.1s;" onmouseover="this.style.background=\'rgba(255,255,255,0.03)\'" onmouseout="this.style.background=\'' + (isActive ? 'rgba(255,255,255,0.04)' : 'transparent') + '\'">' +
       '<div style="display:flex;align-items:center;gap:8px;">' +
         '<div style="width:7px;height:7px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;"></div>' +
-        '<span style="font-size:13px;font-weight:' + (isActive ? '700' : '500') + ';color:' + (isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)') + ';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(partnerName) + '</span>' +
+        '<span style="font-size:13px;font-weight:' + (isActive ? '700' : '500') + ';color:' + (isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)') + ';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(label) + '</span>' +
+        (unread > 0 && !isActive ? '<span style="background:#ef4444;color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;font-weight:700;">' + unread + '</span>' : '') +
       '</div>' +
       '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px;margin-left:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(preview) + '</div>' +
     '</div>';
-  }).join('');
+  }
+
+  // Split into alliance GCs vs DMs
+  var allianceChannels = chatOpenDms.filter(function(id) { return id.startsWith('alliance_'); });
+  var dmChannels = chatOpenDms.filter(function(id) { return !id.startsWith('alliance_'); });
+
+  // Render alliance GC section
+  var gcListEl = document.getElementById('chatAllianceGcList');
+  if (gcListEl) {
+    if (!allianceChannels.length) {
+      gcListEl.innerHTML = '<div style="padding:6px 16px;font-size:12px;color:var(--color-text-tertiary);">No alliance</div>';
+    } else {
+      gcListEl.innerHTML = allianceChannels.map(function(channelId) {
+        var name = channelId.replace(/^alliance_/, '').replace(/_/g, ' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+        return buildRow(channelId, '\u2694 ' + name, '#f59e0b');
+      }).join('');
+    }
+  }
+
+  // Render DM section
+  var dmList = document.getElementById('chatDmList');
+  if (!dmList) return;
+  if (!dmChannels.length) {
+    dmList.innerHTML = '<div style="padding:8px 16px;font-size:12px;color:var(--color-text-tertiary);">No DMs yet</div>';
+  } else {
+    dmList.innerHTML = dmChannels.map(function(channelId) {
+      var partnerName = getDmPartnerName(channelId);
+      return buildRow(channelId, partnerName, chatPlayerColor(partnerName));
+    }).join('');
+  }
 }
 
 function renderChatMessages() {
