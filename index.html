@@ -1912,6 +1912,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
           <ol style="margin:6px 0 0 18px;padding:0;color:var(--color-text-secondary);">
             <li>Food −1% per military pt; stability −1% per economic pt (happiness handled by daily update)</li>
             <li>Applies export bonuses to food, stability, and happiness</li>
+            <li>Export-driven pop stats consume eco income at a 1:0.25 conversion rate (e.g. 4% food from exports costs 1 eco income)</li>
             <li>Adds province income (econ & mil) for provinces ≥50% owned</li>
             <li>Resets defence to the province def-income total</li>
             <li>Applies trade node penalty if applicable</li>
@@ -5498,12 +5499,18 @@ function renderForecast(player, ownedProvinces, econIncome, milIncome, defReset,
       curHapp += subsidyBoost.happiness;
     }
 
-    // 4. Province income with low pop-stat penalties
+    // 4. Province income with low pop-stat penalties + conversion rate
     var penEcon = econIncome;
     var penMil = milIncome;
     if (curFood < 20) penMil = 0;
     if (curStab < 20) penEcon = 0;
     if (curHapp < 20) { penMil /= 2; penEcon /= 2; }
+    // Apply conversion cost to forecast eco income
+    var _fcConvRate = 0.25;
+    if (penEcon > 0) {
+      var _fcDemand = (exportBonus.food + exportBonus.stability + exportBonus.happiness) / _fcConvRate;
+      penEcon = Math.max(0, penEcon - Math.min(_fcDemand, penEcon));
+    }
     curEcon += penEcon;
     curMil += penMil;
 
@@ -7460,6 +7467,24 @@ function runWeeklyUpdate() {
       penaltyNotes.push('happiness<20% → mil+eco income halved');
     }
     if (penaltyNotes.length) changes.push(name + ' penalties: ' + penaltyNotes.join('; '));
+
+    // 4. Apply conversion rate: exports that pay out as food/stab/happ
+    //    consume eco income at 1:0.25 rate (4% stat per 1 eco).
+    //    The stat bonuses are already added above (step 2); here we reduce
+    //    econGrowth by the eco "cost" that generated those bonuses.
+    var CONV_RATE = 0.25; // 1 eco → 0.25% pop stat (or 1 eco → 4% pop stat → rate=0.25)
+    var convCost = 0;
+    if (econGrowth > 0) {
+      var expTotals = expData.totals;
+      // Each 1 eco of income that produced pop-stat output costs CONV_RATE fraction
+      // converted stat bonus = eco_slice * CONV_RATE  =>  eco_slice = bonus / CONV_RATE
+      var demandedEco = (expTotals.food + expTotals.stability + expTotals.happiness) / CONV_RATE;
+      // Cap so we never consume more eco than actually came in
+      convCost = Math.min(demandedEco, econGrowth);
+      // The converted portion yields at CONV_RATE efficiency — so it doesn't add to econ
+      econGrowth -= convCost;
+      if (convCost > 0) changes.push(name + ': ' + convCost.toFixed(2) + ' eco converted to pop stats (rate 1:' + CONV_RATE + ')');
+    }
 
     // 4. Add growth
     econ += econGrowth;
@@ -9923,6 +9948,16 @@ async function checkAndRunAutomaticUpdates() {
           if (happ < 20) { milGrowth /= 2; econGrowth /= 2; penaltyNotes.push('happ<20%→halved'); }
           if (penaltyNotes.length) changes.push(name + ' penalties: ' + penaltyNotes.join('; '));
 
+          // Conversion rate: reduce eco income by cost of pop-stat exports (1:0.25)
+          var _CONV_RATE = 0.25;
+          if (econGrowth > 0) {
+            var _expTotals = expData.totals;
+            var _demandedEco = (_expTotals.food + _expTotals.stability + _expTotals.happiness) / _CONV_RATE;
+            var _convCost = Math.min(_demandedEco, econGrowth);
+            econGrowth -= _convCost;
+            if (_convCost > 0) changes.push(name + ': ' + _convCost.toFixed(2) + ' eco converted to pop stats');
+          }
+
           econ += econGrowth;
           mil  += milGrowth;
 
@@ -10506,7 +10541,7 @@ window.updateClaimBudget = updateClaimBudget;
               </div>
               <div>
                 <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:4px;">Amount</div>
-                <input id="mktGiveAmount1" type="number" min="0.1" step="0.1" value="5" placeholder="e.g. 5" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
+                <input id="mktGiveAmount1" type="number" min="0.1" step="0.1" max="50" value="5" placeholder="e.g. 5" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 90px;gap:8px;">
@@ -10524,7 +10559,7 @@ window.updateClaimBudget = updateClaimBudget;
               </div>
               <div>
                 <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:4px;">Amount</div>
-                <input id="mktGiveAmount2" type="number" min="0.1" step="0.1" placeholder="optional" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
+                <input id="mktGiveAmount2" type="number" min="0.1" step="0.1" max="50" placeholder="optional" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
               </div>
             </div>
           </div>
@@ -10549,7 +10584,7 @@ window.updateClaimBudget = updateClaimBudget;
               </div>
               <div>
                 <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:4px;">Amount</div>
-                <input id="mktGetAmount1" type="number" min="0.1" step="0.1" value="10" placeholder="e.g. 10" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
+                <input id="mktGetAmount1" type="number" min="0.1" step="0.1" max="50" value="10" placeholder="e.g. 10" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 90px;gap:8px;">
@@ -10567,7 +10602,7 @@ window.updateClaimBudget = updateClaimBudget;
               </div>
               <div>
                 <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:4px;">Amount</div>
-                <input id="mktGetAmount2" type="number" min="0.1" step="0.1" placeholder="optional" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
+                <input id="mktGetAmount2" type="number" min="0.1" step="0.1" max="50" placeholder="optional" style="width:100%;padding:8px 10px;font-family:inherit;font-size:13px;border-radius:var(--border-radius-md);border:1px solid var(--color-border-primary);background:var(--color-background-primary);color:var(--color-text-primary);">
               </div>
             </div>
           </div>
@@ -10713,6 +10748,20 @@ async function postMarketplaceOffer() {
 
   console.log('[MKT] Offer inputs — give:', g1r, g1a, g2r, g2a, '| want:', r1r, r1a, r2r, r2a);
   if (!r1r || r1a <= 0) { overlordAlert('Enter a valid amount for the first "I Want" resource.'); return; }
+
+  // ── Amount limits: min 0.1, max 50 ──
+  var _amts = [
+    {label: 'Give (1st)', amt: g1a, required: true},
+    {label: 'Give (2nd)', amt: g2a, required: !!(g2r && g2a > 0)},
+    {label: 'Want (1st)', amt: r1a, required: true},
+    {label: 'Want (2nd)', amt: r2a, required: !!(r2r && r2a > 0)},
+  ];
+  for (var _ai = 0; _ai < _amts.length; _ai++) {
+    var _a = _amts[_ai];
+    if (!_a.required) continue;
+    if (_a.amt < 0.1) { overlordAlert(_a.label + ' amount must be at least 0.1.'); return; }
+    if (_a.amt > 50)  { overlordAlert(_a.label + ' amount cannot exceed 50.'); return; }
+  }
 
   var myPlayer = getWN(idx);
   var myEmail = user.email.toLowerCase();
