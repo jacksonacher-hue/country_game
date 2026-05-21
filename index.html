@@ -1194,6 +1194,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" data-tab="actions">Actions</button>
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
   <button class="tab-btn" data-tab="history">History</button>
+  <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
@@ -10702,7 +10703,7 @@ async function acceptMarketplaceOffer(offerId) {
   // array entirely. Any object references captured before that call become stale.
   // We must look up offerer/accepter INSIDE the action function, after the refresh.
 
-  await performActionWithRefresh('Marketplace trade', function() {
+  await performActionWithRefresh('Marketplace trade', async function() {
     console.log('[MKT] Inside action function — workingNations now has', workingNations.length, 'entries');
 
     // Re-find both players in the FRESHLY LOADED workingNations
@@ -10725,6 +10726,45 @@ async function acceptMarketplaceOffer(offerId) {
       overlordAlert('The offering player was not found after data refresh.');
       return false;
     }
+
+    // ── WEEKLY CAP CHECK ──────────────────────────────────────────────────
+    // Check how much of each capped resource each player is receiving this week
+    var accepterName = getWN(freshMyIdx);
+    var offererName  = getWN(freshOfferIdx);
+
+    // Resources the accepter will receive (the offerer's give side)
+    var toCheckAccepter = [
+      { res: offer.give1Resource, amt: parseFloat(offer.give1Amount) || 0 },
+      offer.give2Resource && offer.give2Amount > 0 ? { res: offer.give2Resource, amt: parseFloat(offer.give2Amount) || 0 } : null
+    ].filter(Boolean);
+
+    // Resources the offerer will receive (the accepter's get side)
+    var toCheckOfferer = [
+      { res: offer.get1Resource, amt: parseFloat(offer.get1Amount) || 0 },
+      offer.get2Resource && offer.get2Amount > 0 ? { res: offer.get2Resource, amt: parseFloat(offer.get2Amount) || 0 } : null
+    ].filter(Boolean);
+
+    for (var ci = 0; ci < toCheckAccepter.length; ci++) {
+      var rc = toCheckAccepter[ci];
+      if (!MKT_WEEKLY_CAPS[rc.res]) continue;
+      var cap = MKT_WEEKLY_CAPS[rc.res];
+      var alreadyBought = await getMktWeeklyBought(accepterName, rc.res);
+      if (alreadyBought + rc.amt > cap) {
+        overlordAlert('Weekly marketplace cap reached!\n' + accepterName + ' has already received ' + alreadyBought.toFixed(1) + ' ' + mktLabel(rc.res) + ' this week (cap: ' + cap + ').\nThis trade would bring them to ' + (alreadyBought + rc.amt).toFixed(1) + '.');
+        return false;
+      }
+    }
+    for (var ci2 = 0; ci2 < toCheckOfferer.length; ci2++) {
+      var rc2 = toCheckOfferer[ci2];
+      if (!MKT_WEEKLY_CAPS[rc2.res]) continue;
+      var cap2 = MKT_WEEKLY_CAPS[rc2.res];
+      var alreadyBought2 = await getMktWeeklyBought(offererName, rc2.res);
+      if (alreadyBought2 + rc2.amt > cap2) {
+        overlordAlert('Weekly marketplace cap reached!\n' + offererName + ' has already received ' + alreadyBought2.toFixed(1) + ' ' + mktLabel(rc2.res) + ' this week (cap: ' + cap2 + ').\nThis trade would bring them to ' + (alreadyBought2 + rc2.amt).toFixed(1) + '.');
+        return false;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     var offerer = workingNations[freshOfferIdx];
     var accepter = workingNations[freshMyIdx];
@@ -10824,7 +10864,8 @@ async function acceptMarketplaceOffer(offerId) {
     var db = window.firebaseDb;
     var historyRecord = Object.assign({}, offer, {
       status: 'traded',
-      tradedAt: Date.now()
+      tradedAt: Date.now(),
+      accepterPlayer: getWN(myIdx)
     });
     await window.firebaseSet(window.firebaseRef(db, 'marketplaceHistory/' + offer.id), historyRecord);
     console.log('[MKT] Offer', offer.id, 'archived to marketplaceHistory');
@@ -11004,6 +11045,62 @@ var ECO_DEFAULT_RATES = {
   stability:1
 };
 
+// ── CIRCUIT BREAKER CONFIG ─────────────────────────────────────────────────
+// Max allowed deviation from baseline per turn cycle (0.5 = ±50%)
+var ECO_CIRCUIT_BREAKER_MAX_CHANGE = 0.5;
+
+// Helper: get start-of-current-week timestamp (Monday 00:00 UTC)
+function getMktWeekStart() {
+  var now = new Date();
+  var day = now.getUTCDay(); // 0=Sun, 1=Mon ... 6=Sat
+  var msSinceMonday = ((day === 0 ? 6 : day - 1)) * 86400000 +
+    now.getUTCHours() * 3600000 + now.getUTCMinutes() * 60000 +
+    now.getUTCSeconds() * 1000 + now.getUTCMilliseconds();
+  return now.getTime() - msSinceMonday;
+}
+
+// ── WEEKLY TRADE CAPS ──────────────────────────────────────────────────────
+// Resources capped at 50 units per player per week (from marketplace trades)
+var MKT_WEEKLY_CAPS = {
+  military:  50,
+  defence:   50,
+  food:      50,
+  happiness: 50,
+  stability: 50
+};
+
+/**
+ * Returns the total amount of a resource bought by a player from the marketplace
+ * in the current week (Sunday–Saturday UTC), from marketplaceHistory.
+ */
+async function getMktWeeklyBought(playerName, resource) {
+  var weekStart = getMktWeekStart();
+  try {
+    var snap = await window.firebaseGet(window.firebaseRef(window.firebaseDb, 'marketplaceHistory'));
+    if (!snap.exists()) return 0;
+    var history = Object.values(snap.val());
+    var total = 0;
+    history.forEach(function(offer) {
+      if ((offer.tradedAt || 0) < weekStart) return; // outside this week
+      // The accepter receives give1/give2; the offerer receives get1/get2
+      var isAccepter = normalizeName(offer.accepterPlayer || '') === normalizeName(playerName);
+      var isOfferer  = normalizeName(offer.fromPlayer || '') === normalizeName(playerName);
+      if (isAccepter) {
+        if (offer.give1Resource === resource) total += parseFloat(offer.give1Amount) || 0;
+        if (offer.give2Resource === resource) total += parseFloat(offer.give2Amount) || 0;
+      }
+      if (isOfferer) {
+        if (offer.get1Resource === resource) total += parseFloat(offer.get1Amount) || 0;
+        if (offer.get2Resource === resource) total += parseFloat(offer.get2Amount) || 0;
+      }
+    });
+    return total;
+  } catch(e) {
+    console.warn('[MKT] getMktWeeklyBought failed:', e);
+    return 0;
+  }
+}
+
 function ecoExtractPairs(offer) {
   var pairs = [];
   var hasGive2 = offer.give2Resource && offer.give2Amount > 0;
@@ -11012,27 +11109,71 @@ function ecoExtractPairs(offer) {
   var gR = offer.give1Resource, gA = parseFloat(offer.give1Amount) || 0;
   var wR = offer.get1Resource,  wA = parseFloat(offer.get1Amount)  || 0;
   if (!gR || !wR || gA <= 0 || wA <= 0) return pairs;
-  pairs.push({ from: gR, to: wR, rate: wA / gA });
-  pairs.push({ from: wR, to: gR, rate: gA / wA });
+  pairs.push({ from: gR, to: wR, fromAmt: gA, toAmt: wA, rate: wA / gA });
+  pairs.push({ from: wR, to: gR, fromAmt: wA, toAmt: gA, rate: gA / wA });
   return pairs;
 }
 
 function computeEcoConversionRates(completedOffers) {
   var offers = completedOffers || [];
 
-  // Build samples map: "resA:resB" -> [rate,...] where rate = resB per 1 resA
-  var samples = {};
+  // ── VWAP calculation ──
+  // For each directional pair (A→B), accumulate: total units of A spent, total units of B received
+  // VWAP rate (B per A) = totalB / totalA   (volume-weighted average price)
+  // Circuit breaker: if a trade implies a rate more than ±50% from the CURRENT baseline for
+  // that pair, it is excluded from the global rate calculation (trade still happened).
+
+  // First pass: compute baseline (simple average) to anchor the circuit breaker
+  var simpleSamples = {};
   offers.forEach(function(offer) {
     ecoExtractPairs(offer).forEach(function(p) {
       var key = p.from + ':' + p.to;
-      if (!samples[key]) samples[key] = [];
-      samples[key].push(p.rate);
+      if (!simpleSamples[key]) simpleSamples[key] = [];
+      simpleSamples[key].push(p.rate);
     });
+  });
+  function simpleAvg(arr) { return arr && arr.length ? arr.reduce(function(s,v){return s+v;},0)/arr.length : null; }
+  function getBaselineRate(a, b) {
+    var d = simpleAvg(simpleSamples[a+':'+b]);
+    if (d !== null) return d;
+    var inv = simpleAvg(simpleSamples[b+':'+a]);
+    return (inv !== null && inv > 0) ? 1/inv : null;
+  }
+
+  // Second pass: VWAP with circuit breaker
+  // vwap[key] = { totalFrom: X, totalTo: Y }  →  rate = totalTo / totalFrom
+  var vwap = {};
+  var circuitTripped = {}; // key -> count of trades excluded
+  offers.forEach(function(offer) {
+    ecoExtractPairs(offer).forEach(function(p) {
+      var key = p.from + ':' + p.to;
+      var baseline = getBaselineRate(p.from, p.to);
+      if (baseline !== null) {
+        var maxRate = baseline * (1 + ECO_CIRCUIT_BREAKER_MAX_CHANGE);
+        var minRate = baseline * (1 - ECO_CIRCUIT_BREAKER_MAX_CHANGE);
+        if (p.rate > maxRate || p.rate < minRate) {
+          // Circuit breaker: trade goes through but is ignored for global rate
+          circuitTripped[key] = (circuitTripped[key] || 0) + 1;
+          return;
+        }
+      }
+      if (!vwap[key]) vwap[key] = { totalFrom: 0, totalTo: 0 };
+      vwap[key].totalFrom += p.fromAmt;
+      vwap[key].totalTo   += p.toAmt;
+    });
+  });
+
+  // Build samples map from VWAP for compatibility with the rest of the function
+  var samples = {};
+  Object.keys(vwap).forEach(function(key) {
+    var v = vwap[key];
+    if (v.totalFrom > 0) {
+      samples[key] = [v.totalTo / v.totalFrom]; // single VWAP "sample"
+    }
   });
 
   function avg(arr) { return arr && arr.length ? arr.reduce(function(s,v){return s+v;},0)/arr.length : null; }
 
-  // Get average rate A->B using direct samples or inverse
   function getRate(a, b) {
     var direct = avg(samples[a + ':' + b]);
     if (direct !== null) return direct;
@@ -11043,7 +11184,6 @@ function computeEcoConversionRates(completedOffers) {
 
   var ALL_RES = ['econ','military','defence','food','happiness','stability'];
 
-  // Try to resolve eco->target by chaining through any single pivot
   function resolveViaChain(target) {
     var pivots = ALL_RES.filter(function(r) { return r !== 'econ' && r !== target; });
     for (var i = 0; i < pivots.length; i++) {
@@ -11060,15 +11200,10 @@ function computeEcoConversionRates(completedOffers) {
   var isDefault = {};
 
   ECO_RATE_RESOURCES.forEach(function(res) {
-    // 1. Direct eco->res
     var r = getRate('econ', res);
     if (r !== null) { rates[res] = r; isDefault[res] = false; return; }
-
-    // 2. Chain through any available pivot
     r = resolveViaChain(res);
     if (r !== null) { rates[res] = r; isDefault[res] = false; return; }
-
-    // 3. Use default eco->mil rate as anchor, then apply any market mil->res rate
     if (res !== 'military') {
       var milToRes = getRate('military', res);
       if (milToRes !== null) {
@@ -11077,8 +11212,6 @@ function computeEcoConversionRates(completedOffers) {
         return;
       }
     }
-
-    // 4. Pure default
     rates[res] = ECO_DEFAULT_RATES[res];
     isDefault[res] = true;
   });
@@ -11088,7 +11221,7 @@ function computeEcoConversionRates(completedOffers) {
     pairCounts[res] = (samples['econ:'+res]||[]).length + (samples[res+':econ']||[]).length;
   });
 
-  return { rates: rates, isDefault: isDefault, offerCount: offers.length, pairCounts: pairCounts, samples: samples };
+  return { rates: rates, isDefault: isDefault, offerCount: offers.length, pairCounts: pairCounts, samples: samples, circuitTripped: circuitTripped };
 }
 
 async function renderEcoRates() {
@@ -11130,14 +11263,11 @@ async function renderEcoRates() {
 
   if (basis) {
     var defCount = ECO_RATE_RESOURCES.filter(function(r){ return result.isDefault[r]; }).length;
-    var milSamples = (result.samples['econ:military']||[]).concat((result.samples['military:econ']||[]).map(function(v){return 1/v;}));
+    var totalTripped = Object.values(result.circuitTripped || {}).reduce(function(s,v){return s+v;},0);
     var parts = [];
-    if (result.offerCount > 0) parts.push(result.offerCount + ' completed trade' + (result.offerCount!==1?'s':''));
-    if (milSamples.length > 0) {
-      var avg_raw = milSamples.reduce(function(s,v){return s+v;},0)/milSamples.length;
-      parts.push('Eco→Military anchor: ' + Math.round(avg_raw*1000)/1000 + ' per Eco');
-    }
+    if (result.offerCount > 0) parts.push(result.offerCount + ' completed trade' + (result.offerCount!==1?'s':'') + ' (VWAP)');
     if (defCount > 0) parts.push(defCount + ' rate' + (defCount!==1?'s':'') + ' using defaults');
+    if (totalTripped > 0) parts.push('<span style="color:#fbbf24;">⚡ ' + totalTripped + ' trade' + (totalTripped!==1?'s':'') + ' excluded by circuit breaker</span>');
     basis.innerHTML = parts.length ? parts.join(' · ') : 'No completed trades yet — showing default rates.';
   }
 }
@@ -11162,6 +11292,23 @@ async function ecoConvertQuick(toResource, rate) {
 
   var gain = Math.round(ecoAmt * rate * 1000) / 1000;
 
+  // ── WEEKLY CAP CHECK ──────────────────────────────────────────────────
+  if (MKT_WEEKLY_CAPS[toResource]) {
+    var cap = MKT_WEEKLY_CAPS[toResource];
+    var playerName = getWN(idx);
+    var alreadyBought = await getMktWeeklyBought(playerName, toResource);
+    if (alreadyBought + gain > cap) {
+      overlordAlert(
+        'Weekly marketplace cap reached!\nYou have already received ' + alreadyBought.toFixed(1) + ' ' + meta.label +
+        ' this week from the marketplace (cap: ' + cap + ').\n' +
+        'This conversion would add ' + gain.toFixed(1) + ', bringing you to ' + (alreadyBought + gain).toFixed(1) + '.\n\n' +
+        'You can receive at most ' + Math.max(0, cap - alreadyBought).toFixed(1) + ' more this week.'
+      );
+      return;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────
+
   var PCT_STATS = ['food','happiness','stability'];
   await performActionWithRefresh('Eco → ' + meta.label + ' conversion (market rate)', function() {
     var p = workingNations[idx];
@@ -11177,6 +11324,23 @@ async function ecoConvertQuick(toResource, rate) {
     }
     addToLog('Market conversion: ' + getWN(idx) + ' — ' + ecoAmt + ' eco → ' + gain + ' ' + meta.label + ' (rate 1:' + rate + ')');
   });
+  // Record this conversion in marketplaceHistory so weekly cap tracks it correctly
+  try {
+    var convRecord = {
+      id: 'conv_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      fromPlayer: getWN(idx),
+      accepterPlayer: getWN(idx),
+      give1Resource: 'econ',  give1Amount: ecoAmt,
+      give2Resource: '',      give2Amount: 0,
+      get1Resource: toResource, get1Amount: gain,
+      get2Resource: '',      get2Amount: 0,
+      status: 'traded',
+      listingType: 'conversion',
+      tradedAt: Date.now(),
+      createdAt: Date.now()
+    };
+    await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'marketplaceHistory/' + convRecord.id), convRecord);
+  } catch(e) { console.warn('[MKT] Could not archive ecoConvert to marketplaceHistory:', e); }
   if (typeof renderActionsTab === 'function') renderActionsTab();
   showToast('Converted ' + ecoAmt + ' Eco → ' + gain + ' ' + meta.label, 'success');
 }
