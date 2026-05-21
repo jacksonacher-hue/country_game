@@ -1195,6 +1195,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
   <button class="tab-btn" data-tab="history">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
+  <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
@@ -6538,33 +6539,56 @@ async function addPlayerToAlliance() {
     }
     p.alliances = aName;
 
-    var currentWars = parseWarNames(p.wars);
-    if (!currentWars.length) {
-      var allianceWars = {};
-      workingNations.forEach(function(n) {
-        if (!n.alliances) return;
-        var alliances = n.alliances.split(',').map(function(a){return a.trim().toLowerCase();});
-        if (alliances.indexOf(aName.toLowerCase()) < 0) return;
-        parseWarNames(n.wars).forEach(function(w) {
-          var key = w.name.toLowerCase();
-          if (!allianceWars[key]) allianceWars[key] = { name: w.name, counts: {} };
-          allianceWars[key].counts[w.side] = (allianceWars[key].counts[w.side] || 0) + 1;
-        });
+    // ── Sync all alliance wars onto the new member ──────────────────────────
+    // Collect every war any current alliance member is in, with majority-vote side.
+    var allianceWars = {};
+    workingNations.forEach(function(n, ni) {
+      if (ni === pIdx) return; // skip the player being added
+      if (!n.alliances) return;
+      var alliances = n.alliances.split(',').map(function(a){return a.trim().toLowerCase();});
+      if (alliances.indexOf(aName.toLowerCase()) < 0) return;
+      parseWarNames(n.wars).forEach(function(w) {
+        var key = w.name.toLowerCase();
+        if (!allianceWars[key]) allianceWars[key] = { name: w.name, counts: {} };
+        allianceWars[key].counts[w.side] = (allianceWars[key].counts[w.side] || 0) + 1;
       });
-      var inheritedWars = Object.keys(allianceWars).map(function(key) {
-        var entry = allianceWars[key];
-        var sides = Object.keys(entry.counts).map(function(side) { return parseInt(side); });
-        var chosenSide = sides.reduce(function(prev, cur) {
-          return entry.counts[cur] > entry.counts[prev] ? cur : prev;
-        }, sides[0] || 0);
-        return { name: entry.name, side: chosenSide, days: 0 };
+    });
+
+    // Determine authoritative war list for the whole alliance (majority side per war)
+    var inheritedWars = Object.keys(allianceWars).map(function(key) {
+      var entry = allianceWars[key];
+      var sides = Object.keys(entry.counts).map(function(side) { return parseInt(side); });
+      var chosenSide = sides.reduce(function(prev, cur) {
+        return entry.counts[cur] > entry.counts[prev] ? cur : prev;
+      }, sides[0] || 0);
+      return { name: entry.name, side: chosenSide, days: 0 };
+    });
+
+    // Apply the full war list to the new member (overwrite)
+    p.wars = inheritedWars.map(function(w){return w.name + ' - ' + w.side + ' - ' + w.days;}).join(', ');
+
+    // Also ensure EVERY existing alliance member is in EVERY alliance war (sync stragglers)
+    workingNations.forEach(function(n, ni) {
+      if (ni === pIdx) return;
+      if (!n.alliances) return;
+      var alliances = n.alliances.split(',').map(function(a){return a.trim().toLowerCase();});
+      if (alliances.indexOf(aName.toLowerCase()) < 0) return;
+      var memberWars = parseWarNames(n.wars);
+      var changed = false;
+      inheritedWars.forEach(function(iw) {
+        var already = memberWars.find(function(mw){ return mw.name.toLowerCase() === iw.name.toLowerCase(); });
+        if (!already) {
+          memberWars.push({ name: iw.name, side: iw.side, days: 0 });
+          changed = true;
+        }
       });
-      if (inheritedWars.length) {
-        p.wars = inheritedWars.map(function(w){return w.name + ' - ' + w.side + ' - ' + w.days;}).join(', ');
-        addToLog('Added ' + getWN(pIdx) + ' to alliance: ' + aName + ' and inherited wars: ' + inheritedWars.map(function(w){return w.name;}).join(', '));
-      } else {
-        addToLog('Added ' + getWN(pIdx) + ' to alliance: ' + aName);
+      if (changed) {
+        n.wars = memberWars.map(function(w){return w.name + ' - ' + w.side + ' - ' + w.days;}).join(', ');
       }
+    });
+
+    if (inheritedWars.length) {
+      addToLog('Added ' + getWN(pIdx) + ' to alliance: ' + aName + ' — joined wars: ' + inheritedWars.map(function(w){return w.name + ' (side ' + w.side + ')';}).join(', '));
     } else {
       addToLog('Added ' + getWN(pIdx) + ' to alliance: ' + aName);
     }
@@ -6622,6 +6646,42 @@ async function removePlayerFromAlliance() {
     p.wars = '';
 
     if (opposingPlayers.length) addTruces(pIdx, opposingPlayers, 3);
+
+    // ── Sync remaining alliance members: remove wars no longer shared ────────
+    // After the player leaves, rebuild the authoritative war list from the
+    // remaining members and remove any wars that are now unsupported.
+    existing.forEach(function(aName) {
+      var remainingWars = {};
+      workingNations.forEach(function(n, ni) {
+        if (ni === pIdx) return; // leaving player already cleared
+        if (!n.alliances) return;
+        var alliances = n.alliances.split(',').map(function(a){return a.trim().toLowerCase();});
+        if (alliances.indexOf(aName.toLowerCase()) < 0) return;
+        parseWarNames(n.wars).forEach(function(w) {
+          var key = w.name.toLowerCase();
+          if (!remainingWars[key]) remainingWars[key] = { name: w.name, counts: {} };
+          remainingWars[key].counts[w.side] = (remainingWars[key].counts[w.side] || 0) + 1;
+        });
+      });
+      // Authoritative set = wars at least one remaining member still has
+      var validWarKeys = Object.keys(remainingWars);
+      // Ensure every remaining member has exactly the wars the alliance still holds
+      workingNations.forEach(function(n, ni) {
+        if (ni === pIdx) return;
+        if (!n.alliances) return;
+        var alliances = n.alliances.split(',').map(function(a){return a.trim().toLowerCase();});
+        if (alliances.indexOf(aName.toLowerCase()) < 0) return;
+        var memberWars = parseWarNames(n.wars);
+        // Remove wars not in remaining set, add wars missing from member
+        var synced = [];
+        validWarKeys.forEach(function(key) {
+          var entry = remainingWars[key];
+          var existing_war = memberWars.find(function(mw){ return mw.name.toLowerCase() === key; });
+          synced.push({ name: entry.name, side: existing_war ? existing_war.side : parseInt(Object.keys(entry.counts)[0]) || 0, days: existing_war ? existing_war.days : 0 });
+        });
+        n.wars = synced.map(function(w){return w.name + ' - ' + w.side + ' - ' + w.days;}).join(', ');
+      });
+    });
 
     var logMessage = 'Removed ' + getWN(pIdx) + ' from alliance(s): ' + existing.join(', ');
     if (warNames.length) logMessage += ' and from wars: ' + warNames.join(', ');
@@ -12089,13 +12149,13 @@ function isLockedOut() {
   return _lockoutCached;
 }
 
-// Console shortcut: type  locked=false  or  locked=true  to override
-Object.defineProperty(window, 'locked', {
+// Console shortcut: type  school_blocked=false  or  school_blocked=true  to override
+Object.defineProperty(window, 'school_blocked', {
   get: function() { return isLockedOut(); },
   set: function(val) {
     _lockoutOverride = !!val;
     applyLockoutState();
-    console.log('[LOCKOUT] Override set → locked=' + _lockoutOverride);
+    console.log('[LOCKOUT] Override set → school_blocked=' + _lockoutOverride);
   },
   configurable: true
 });
