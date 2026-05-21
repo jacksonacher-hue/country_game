@@ -2764,7 +2764,7 @@ function actionsPreviewBattle() {
     if (snap.exists()) {
       var cdData = snap.val();
       var elapsed = Date.now() - (cdData.lastBattle || 0);
-      var msCooldown = 5 * 60 * 60 * 1000; // 5-hour battle cooldown
+      
       if (elapsed < msCooldown) {
         var msLeft = msCooldown - elapsed;
         var hLeft = Math.floor(msLeft / 3600000);
@@ -3290,7 +3290,7 @@ async function performInitiateBattleAction() {
     if (cdSnap.exists()) {
       var cdData = cdSnap.val();
       var elapsed = Date.now() - (cdData.lastBattle || 0);
-      var msCooldown = 5 * 60 * 60 * 1000; // 5-hour battle cooldown
+      var msCooldown = 3 * 60 * 60 * 1000; // 5-hour battle cooldown
       if (elapsed < msCooldown) {
         var msLeft = msCooldown - elapsed;
         var hLeft = Math.floor(msLeft / 3600000);
@@ -3302,7 +3302,7 @@ async function performInitiateBattleAction() {
           resultEl.innerHTML = '<div style="padding:16px 18px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-lg);display:flex;align-items:flex-start;gap:12px;">' +
             '<span style="font-size:22px;line-height:1;">⏳</span>' +
             '<div>' +
-              '<div style="font-size:13px;font-weight:700;color:var(--color-text-warning);margin-bottom:4px;">Battle on cooldown (5 hours)</div>' +
+              '<div style="font-size:13px;font-weight:700;color:var(--color-text-warning);margin-bottom:4px;">Battle on cooldown (3 hours)</div>' +
               '<div style="font-size:12px;color:var(--color-text-secondary);">A battle in <strong>' + esc(warName) + '</strong> was already rolled by <strong>' + esc(rolledBy) + '</strong>. You can fight again in <strong style="color:var(--color-text-warning);">' + timeStr + '</strong>.</div>' +
             '</div>' +
           '</div>';
