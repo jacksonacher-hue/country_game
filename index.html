@@ -12658,10 +12658,25 @@ function buildLockoutHTML(countdownId) {
       '</div>' +
 
     '</div>' +
+  '</div>' +
+
+    '<div style="' +
+      'position:relative;z-index:1;margin-top:12px;' +
+      'background:var(--color-background-secondary);' +
+      'border:1px solid var(--color-border-primary);' +
+      'border-radius:var(--border-radius-lg);' +
+      'padding:14px 28px;text-align:center;max-width:420px;width:90%;' +
+      'opacity:0.6;' +
+    '">' +
+      '<div style="font-size:12px;color:var(--color-text-tertiary);letter-spacing:0.3px;font-family:\'IBM Plex Sans\',sans-serif;">' +
+        'lol you thought you could get past 💀 touch grass' +
+      '</div>' +
+    '</div>' +
+
   '</div>';
 }
 
-// ── Cached lockout state — checked once at startup, then updated only by the tick ──
+// ══ Cached lockout state — checked once at startup, then updated only by the tick ──
 var _lockoutCached = null; // null = not yet initialised
 var _lockoutOverride = null; // null = no override; true/false = admin override
 
@@ -12680,12 +12695,86 @@ function isLockedOut() {
 Object.defineProperty(window, 'school_blocked', {
   get: function() { return isLockedOut(); },
   set: function(val) {
+    // If they're trying to bypass (set to false) during an actual lockout, troll them
+    if (!val && isInLockoutPeriod()) {
+      _lockoutOverride = null; // keep locked
+      applyTouchGrassScreen();
+      console.log('[LOCKOUT] Nice try. Touch grass.');
+      return;
+    }
     _lockoutOverride = !!val;
     applyLockoutState();
     console.log('[LOCKOUT] Override set → school_blocked=' + _lockoutOverride);
   },
   configurable: true
 });
+
+function applyTouchGrassScreen() {
+  var pageOverlay = document.getElementById('pageLockedOverlay');
+  if (pageOverlay) {
+    pageOverlay.innerHTML = buildTouchGrassHTML();
+    pageOverlay.style.display = 'block';
+  }
+}
+
+function buildTouchGrassHTML() {
+  return '<div style="' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'height:100vh;gap:0;background:var(--color-background-primary);' +
+      'user-select:none;position:relative;overflow:hidden;font-family:\'IBM Plex Mono\',monospace;' +
+    '">' +
+
+    '<div style="' +
+      'position:absolute;inset:0;' +
+      'background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),' +
+        'linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);' +
+      'background-size:40px 40px;pointer-events:none;' +
+    '"></div>' +
+
+    '<div style="' +
+      'position:absolute;font-size:clamp(60px,14vw,130px);font-weight:900;letter-spacing:-2px;' +
+      'color:rgba(255,255,255,0.03);white-space:nowrap;pointer-events:none;' +
+      'top:50%;left:50%;transform:translate(-50%,-50%) rotate(-8deg);' +
+    '">NICE TRY</div>' +
+
+    '<div style="' +
+      'position:relative;z-index:1;' +
+      'background:var(--color-background-secondary);' +
+      'border:1px solid var(--color-border-primary);' +
+      'border-top:3px solid #22c55e;' +
+      'border-radius:var(--border-radius-lg);' +
+      'padding:32px 40px;text-align:center;max-width:420px;width:90%;' +
+      'box-shadow:0 20px 60px rgba(0,0,0,0.5);' +
+    '">' +
+
+      '<div style="font-size:48px;margin-bottom:16px;line-height:1;">🌿</div>' +
+
+      '<div style="' +
+        'font-size:22px;font-weight:800;letter-spacing:1px;text-transform:uppercase;' +
+        'color:#22c55e;margin-bottom:6px;' +
+      '">lol you thought</div>' +
+
+      '<div style="' +
+        'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;' +
+        'color:var(--color-text-tertiary);margin-bottom:20px;' +
+      '">you could get past</div>' +
+
+      '<div style="height:1px;background:var(--color-border-secondary);margin-bottom:20px;"></div>' +
+
+      '<div style="' +
+        'font-size:28px;font-weight:900;color:#22c55e;margin-bottom:16px;letter-spacing:2px;' +
+      '">touch grass 💀</div>' +
+
+      '<div style="' +
+        'font-size:12px;color:var(--color-text-tertiary);line-height:1.7;' +
+        'font-family:\'IBM Plex Sans\',sans-serif;' +
+      '">' +
+        'still blocked. nice try though.' +
+      '</div>' +
+
+    '</div>' +
+  '</div>';
+}
 
 var _lockoutTickInterval = null;
 
