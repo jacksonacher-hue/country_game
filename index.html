@@ -2542,6 +2542,13 @@ function renderActionsTab() {
                 </select>
               </div>
             </div>
+            <div class="action-field" style="margin-bottom:10px;">
+              <label>🎯 Primary Target (enemy player)</label>
+              <select id="actionsBattleTarget" style="width:100%;">
+                <option value="">— Select a war first —</option>
+              </select>
+              <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">Province rewards and eco seizure apply to this target. Whole enemy side still fights.</div>
+            </div>
             <!-- Attacker/Defender side display like admin -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;" id="actionsBattleSides">
               <div style="background:var(--color-background-tertiary);border:1px solid rgba(248,113,113,0.3);border-radius:var(--border-radius-md);padding:12px;">
@@ -2710,6 +2717,23 @@ function actionsPreviewBattle() {
   }
   atkEl.innerHTML = renderSide(sides[0]);
   defEl.innerHTML = renderSide(sides[1]);
+
+  // ── Populate target dropdown with enemy-side players ──
+  var targetSel = document.getElementById('actionsBattleTarget');
+  if (targetSel) {
+    var enemySide = mySide === null ? 1 : (mySide === 0 ? 1 : 0);
+    var enemyIds = sides[enemySide] || [];
+    if (enemyIds.length) {
+      targetSel.innerHTML = enemyIds.map(function(pi) {
+        var n = workingNations[pi];
+        var name = getWN(pi);
+        var mil = parseFloat(n.military)||0, def = parseFloat(n.defence)||0;
+        return '<option value="' + pi + '">' + esc(name) + ' (MIL:' + mil.toFixed(1) + ' DEF:' + def.toFixed(1) + ')</option>';
+      }).join('');
+    } else {
+      targetSel.innerHTML = '<option value="">— No enemies found —</option>';
+    }
+  }
 
   // ── Check cooldown and update battle button state ──
   var battleBtn = document.querySelector('[onclick="performInitiateBattleAction()"]');
@@ -3269,7 +3293,14 @@ async function performInitiateBattleAction() {
 
   var attackers = attackerIds.map(buildBattlePlayer);
   var defenders = defenderIds.map(buildBattlePlayer);
-  var targetIdx = defenders.length ? defenders[0].idx : null;
+
+  // Use the selected target player if valid, otherwise fall back to first defender
+  var targetSelEl = document.getElementById('actionsBattleTarget');
+  var targetSelVal = targetSelEl ? parseInt(targetSelEl.value) : NaN;
+  var targetIdx = (!isNaN(targetSelVal) && defenderIds.indexOf(targetSelVal) >= 0)
+    ? targetSelVal
+    : (defenders.length ? defenders[0].idx : null);
+
   var r = simulateBattleTeams(attackers, defenders, targetIdx);
   var result = r.percent > 0 ? 'attacker' : (r.percent < 0 ? 'defender' : 'draw');
   window.__playerBattleAction = { warName: warName, attackers: attackers, defenders: defenders, targetIdx: targetIdx, result: result, r: r };
@@ -3391,8 +3422,10 @@ async function performInitiateBattleAction() {
   var rewardHtml = '';
   if (result === 'attacker') {
     var pctBudget = Math.abs(r.percent);
-    var defLoserName = defenders.length ? defenders[0].name : '';
-    var defLoserIdx  = defenders.length ? defenders[0].idx  : -1;
+    // Use the selected target for province/export/eco rewards
+    var targetDefender = defenders.find(function(d){ return d.idx === targetIdx; }) || defenders[0];
+    var defLoserName = targetDefender ? targetDefender.name : '';
+    var defLoserIdx  = targetDefender ? targetDefender.idx  : -1;
 
     // ── Province transfer table (same as admin) ──
     var loserProvs = defenderProvinces; // already filtered above
