@@ -354,6 +354,10 @@ function setAdminAuthUI(user) {
     registerUserInFirebase(user);
     loadRegisteredUsersIntoDropdown();
     if (typeof loadChatLastSeenFromCookie === 'function') loadChatLastSeenFromCookie();
+    // Subscribe to chat globally so badge & notifications work without entering the Chat tab
+    setTimeout(function() {
+      if (typeof subscribeChat === 'function') subscribeChat();
+    }, 2500);
     // Load alliance GCs the player is already in
     setTimeout(function() { if (typeof subscribeAllianceGcs === 'function') subscribeAllianceGcs(); }, 1500);
     // Check if automatic daily update needs to run
@@ -4217,6 +4221,15 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (tabName === 'marketplace') {
       renderMarketplace();
       subscribeMarketplace();
+      // Force fresh data fetch so economics are up-to-date
+      if (window.firebaseDb && window.firebaseRef && window.firebaseGet) {
+        window.firebaseGet(window.firebaseRef(window.firebaseDb, 'marketplace')).then(function(snap) {
+          var data = snap.exists() ? snap.val() : {};
+          marketplaceOffers = data ? Object.values(data) : [];
+          marketplaceOffers.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+          renderMarketplace();
+        }).catch(function(e){ console.warn('[MKT] refresh on tab enter failed', e); });
+      }
     }
     // Chat tab
     if (tabName === 'chat') {
@@ -11504,12 +11517,18 @@ window.ecoConvertQuick = ecoConvertQuick;
         <div id="chatMessages" style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:2px;"></div>
 
         <!-- Input bar -->
-        <div style="padding:12px 20px;border-top:1px solid var(--color-border-secondary);background:var(--color-background-secondary);display:flex;gap:10px;align-items:flex-end;">
-          <textarea id="chatInput" rows="1" placeholder="Message…"
-            style="flex:1;padding:10px 14px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);resize:none;line-height:1.5;max-height:120px;overflow-y:auto;"
-            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMessage();}"></textarea>
-          <button onclick="sendChatMessage()" style="padding:10px 20px;font-family:inherit;font-size:13px;font-weight:700;color:#fff;background:#1d4ed8;border:none;border-radius:var(--border-radius-md);cursor:pointer;white-space:nowrap;flex-shrink:0;">Send</button>
+        <div style="padding:12px 20px;border-top:1px solid var(--color-border-secondary);background:var(--color-background-secondary);">
+          <div style="display:flex;gap:10px;align-items:flex-end;">
+            <textarea id="chatInput" rows="1" placeholder="Message…" maxlength="50"
+              style="flex:1;padding:10px 14px;font-family:inherit;font-size:13px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);resize:none;line-height:1.5;max-height:120px;overflow-y:auto;"
+              oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';(function(el){var cc=document.getElementById('chatCharCount');if(cc){var len=el.value.length;cc.textContent=len+'/50';cc.style.color=len>=45?'#f87171':len>=35?'#fbbf24':'var(--color-text-tertiary)';};})(this);"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMessage();}"></textarea>
+            <button id="chatSendBtn" onclick="sendChatMessage()" style="padding:10px 20px;font-family:inherit;font-size:13px;font-weight:700;color:#fff;background:#1d4ed8;border:none;border-radius:var(--border-radius-md);cursor:pointer;white-space:nowrap;flex-shrink:0;">Send</button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;padding:0 2px;">
+            <span id="chatCooldownStatus" style="font-size:11px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;"></span>
+            <span id="chatCharCount" style="font-size:11px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;">0/50</span>
+          </div>
         </div>
       </div>
 
@@ -11627,6 +11646,10 @@ function startDm() {
   switchChatChannel(channelId);
 }
 
+var _chatLastSentTime = 0;
+var CHAT_COOLDOWN_MS = 10000; // 10 seconds
+var CHAT_MAX_CHARS = 50;
+
 async function sendChatMessage() {
   var input = document.getElementById('chatInput');
   var text = (input ? input.value : '').trim();
@@ -11636,6 +11659,40 @@ async function sendChatMessage() {
   var myPlayer = chatGetMyPlayer();
   if (!myEmail) { overlordAlert('Log in to chat.'); return; }
   if ((typeof findAssignedPlayerIdx === 'function') && findAssignedPlayerIdx() < 0) { overlordAlert('You must be assigned a player nation to send messages.'); return; }
+
+  // ── Mute check ──
+  if (typeof isChatUserMuted === 'function' && isChatUserMuted(myEmail)) {
+    var muteLeft = Math.ceil((_chatMutedUsers[myEmail.toLowerCase()] - Date.now()) / 1000);
+    overlordAlert('You are muted for ' + muteLeft + ' more second' + (muteLeft !== 1 ? 's' : '') + '.');
+    return;
+  }
+
+  // ── Char limit ──
+  if (text.length > CHAT_MAX_CHARS) {
+    overlordAlert('Message too long! Max ' + CHAT_MAX_CHARS + ' characters.');
+    return;
+  }
+
+  // ── Cooldown (skip for admin) ──
+  if (!isAdminUser()) {
+    var now = Date.now();
+    var elapsed = now - _chatLastSentTime;
+    if (elapsed < CHAT_COOLDOWN_MS) {
+      var remaining = Math.ceil((CHAT_COOLDOWN_MS - elapsed) / 1000);
+      overlordAlert('Please wait ' + remaining + ' second' + (remaining !== 1 ? 's' : '') + ' before sending another message.');
+      return;
+    }
+    _chatLastSentTime = now;
+    // Start cooldown UI countdown
+    (function startCooldownTicker() {
+      var statusEl = document.getElementById('chatCooldownStatus');
+      if (!statusEl) return;
+      var tick = setInterval(function() {
+        var remaining = Math.ceil((CHAT_COOLDOWN_MS - (Date.now() - _chatLastSentTime)) / 1000);
+        if (remaining <= 0) { clearInterval(tick); statusEl.textContent = ''; } else { statusEl.textContent = '⏳ ' + remaining + 's cooldown'; }
+      }, 250);
+    })();
+  }
 
   console.log('[CHAT] Sending message to channel:', chatCurrentChannel, '| text:', text.slice(0,60));
 
@@ -11894,8 +11951,20 @@ function renderChatMessages() {
       '</div>';
     }
 
-    html += '<div style="padding:3px 0 3px 16px;font-size:13px;color:var(--color-text-primary);line-height:1.55;word-break:break-word;' + (isMe ? 'color:var(--color-text-primary);' : '') + '">' +
-      esc(msg.text).replace(/\n/g, '<br>') +
+    var adminBtns = '';
+    if (isAdminUser()) {
+      var safeChannel = esc(chatCurrentChannel);
+      var safeMsgId   = esc(msg.id || '');
+      var safeEmail   = esc(msg.email || '');
+      var safePlayer  = esc(msg.player || '');
+      adminBtns = '<span class="_adminMsgActions" style="display:inline-flex;gap:4px;flex-shrink:0;opacity:0.6;transition:opacity 0.15s;" onmouseover="this.style.opacity=\'1\'" onmouseout="this.style.opacity=\'0.6\'">' +
+        '<button class="_adminDelBtn" data-channel="' + safeChannel + '" data-msgid="' + safeMsgId + '" title="Delete message" style="background:none;border:none;cursor:pointer;font-size:13px;padding:0 3px;line-height:1;color:#f87171;font-weight:700;">&#x2715;</button>' +
+        '<button class="_adminMuteBtn" data-email="' + safeEmail + '" data-player="' + safePlayer + '" title="Mute for 5 min" style="background:none;border:none;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">&#x1F507;</button>' +
+      '</span>';
+    }
+    html += '<div style="padding:3px 0 3px 16px;font-size:13px;color:var(--color-text-primary);line-height:1.55;word-break:break-word;display:flex;align-items:flex-start;gap:6px;">' +
+      '<span style="flex:1;">' + esc(msg.text).replace(/\n/g, '<br>') + '</span>' +
+      adminBtns +
     '</div>';
   });
 
@@ -11904,6 +11973,20 @@ function renderChatMessages() {
   if (wasAtBottom || msgs[msgs.length-1]?.email === myEmail) {
     el.scrollTop = el.scrollHeight;
   }
+
+  // ── Admin button event delegation ──
+  el.querySelectorAll('._adminDelBtn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      adminDeleteChatMsg(btn.dataset.channel, btn.dataset.msgid);
+    });
+  });
+  el.querySelectorAll('._adminMuteBtn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      adminMuteChatUser(btn.dataset.email, btn.dataset.player);
+    });
+  });
 
   // Mark as seen
   if (msgs.length) chatLastSeen[chatCurrentChannel] = msgs[msgs.length-1].ts;
@@ -12023,6 +12106,63 @@ function updateChatBadge() {
   window._chatUnreadByChannel = byChannel;
   if (badge) { badge.textContent = total > 99 ? '99+' : String(total); badge.style.display = total > 0 ? 'inline-block' : 'none'; }
 }
+
+// ── Admin: delete a specific message ──
+async function adminDeleteChatMsg(channelId, msgId) {
+  if (!isAdminUser()) return;
+  try {
+    await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'chat/' + channelId + '/' + msgId), null);
+    showAdminToast('Message deleted.', 'success');
+  } catch(e) {
+    console.error('[CHAT] adminDeleteChatMsg failed', e);
+    showAdminToast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+// ── Admin: mute a user for 5 minutes ──
+var _chatMutedUsers = {}; // email -> unmuteTimestamp
+async function adminMuteChatUser(email, playerName) {
+  if (!isAdminUser()) return;
+  if (!email) { showAdminToast('No email on this message.', 'error'); return; }
+  var unmuteAt = Date.now() + 5 * 60 * 1000;
+  _chatMutedUsers[email.toLowerCase()] = unmuteAt;
+  // Persist mute in Firebase so it survives page refreshes
+  try {
+    await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'chatMutes/' + email.toLowerCase().replace(/[@.]/g, '_')), { email: email.toLowerCase(), unmuteAt: unmuteAt });
+  } catch(e) { console.warn('[CHAT] Could not persist mute', e); }
+  showAdminToast('Muted ' + (playerName || email) + ' for 5 minutes.', 'success');
+}
+
+function isChatUserMuted(email) {
+  if (!email) return false;
+  var key = email.toLowerCase();
+  var until = _chatMutedUsers[key];
+  if (!until) return false;
+  if (Date.now() >= until) { delete _chatMutedUsers[key]; return false; }
+  return true;
+}
+
+// Subscribe to live mutes from Firebase
+(function subscribeChatMutes() {
+  function setup() {
+    if (!window.firebaseDb || !window.firebaseRef || !window.firebaseOnValue) { setTimeout(setup, 1000); return; }
+    window.firebaseOnValue(window.firebaseRef(window.firebaseDb, 'chatMutes'), function(snap) {
+      var data = snap.val() || {};
+      _chatMutedUsers = {};
+      Object.values(data).forEach(function(m) {
+        if (m.email && m.unmuteAt && Date.now() < m.unmuteAt) {
+          _chatMutedUsers[m.email.toLowerCase()] = m.unmuteAt;
+        }
+      });
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);
+  else setup();
+})();
+
+window.adminDeleteChatMsg = adminDeleteChatMsg;
+window.adminMuteChatUser = adminMuteChatUser;
+window.isChatUserMuted = isChatUserMuted;
 
 window.renderChatTab = renderChatTab;
 window.subscribeChat = subscribeChat;
