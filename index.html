@@ -2054,12 +2054,20 @@ let currentNationSheet = '';
 let nationsDetailView = false;
 // ── Admin access guard ────────────────────────────────────────────────────────
 // Only this email may see/use the Admin tab. Change to match your account.
-var ADMIN_EMAIL = 'jacksonacher@gmail.com';
+// ── Admin access guard ────────────────────────────────────────────────────────
+// Only these emails may see/use the Admin tab.
+var ADMIN_EMAIL = [
+  'jacksonacher@gmail.com', 
+  'nl.171268@student.shore.nsw.edu.au',
+];
 
 // Always read live from Firebase Auth — never trust a JS variable
 function isAdminUser() {
   var user = window.firebaseAuth && window.firebaseAuth.currentUser;
-  return !!(user && user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+  if (!user || !user.email) return false;
+  
+  // Checks if the lowercased email exists anywhere within the whitelist array
+  return ADMIN_EMAIL.map(function(e) { return e.toLowerCase(); }).indexOf(user.email.toLowerCase()) !== -1;
 }
 
 // Keep window.adminAllowed in sync but make it non-writable so console tricks don't work
