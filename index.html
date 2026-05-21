@@ -1810,6 +1810,13 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
           <button onclick="removePlayerFromWar()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fff;background:#D85A30;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Remove</button>
         </div>
 
+        <!-- Alliance War Audit -->
+        <div class="auto-sub-title" style="margin-top:12px;">Alliance War Sync</div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+          <button onclick="adminSyncAllianceWars()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fbbf24;background:#261e0d;border:1px solid #d97706;border-radius:var(--border-radius-md);cursor:pointer;">🔍 Audit &amp; Fix Alliance Wars</button>
+          <span style="font-size:12px;color:var(--color-text-tertiary);">Checks every war — if a player is in it, their alliance members are added too.</span>
+        </div>
+
         <hr style="border:none;border-top:0.5px solid var(--color-border-tertiary);margin:16px 0;">
 
         <!-- Remove Players -->
@@ -3832,17 +3839,68 @@ async function leaveAllianceAction() {
   var allianceName = sel ? sel.value.trim() : '';
   if (!allianceName) { overlordAlert('No alliance selected.'); return; }
   var playerName = getWN(idx);
-  if (!confirm('Are you sure you want ' + playerName + ' to leave "' + allianceName + '"?')) return;
+  if (!confirm('Are you sure you want ' + playerName + ' to leave "' + allianceName + '"? They will also be removed from all alliance wars.')) return;
   await performActionWithRefresh('Leave alliance (' + allianceName + ')', function() {
     var n = workingNations[idx];
     var remaining = (n.alliances || '').split(',').map(function(a){ return a.trim(); }).filter(function(a){ return a && a !== '—' && a.toLowerCase() !== 'none' && a.toLowerCase() !== allianceName.toLowerCase(); });
     n.alliances = remaining.length ? remaining.join(', ') : '—';
-    addToLog(playerName + ' left alliance: ' + allianceName);
+
+    // ── Remove all wars and add truces (same logic as admin removePlayerFromAlliance) ──
+    var wars = parseWarNames(n.wars);
+    var warNames = wars.map(function(w){ return w.name; });
+    var opposingPlayers = [];
+    wars.forEach(function(war) {
+      workingNations.forEach(function(opp, oi) {
+        if (oi === idx) return;
+        parseWarNames(opp.wars).forEach(function(ow) {
+          if (ow.name.toLowerCase() === war.name.toLowerCase() && ow.side !== war.side) {
+            opposingPlayers.push(getWN(oi));
+          }
+        });
+      });
+    });
+    opposingPlayers = opposingPlayers.filter(function(name, i, self){ return self.indexOf(name) === i; });
+    n.wars = '';
+    if (opposingPlayers.length) addTruces(idx, opposingPlayers, 3);
+
+    // ── Sync remaining alliance members: rebuild their war lists without this player's influence ──
+    var remainingWars = {};
+    workingNations.forEach(function(m, mi) {
+      if (mi === idx) return;
+      if (!m.alliances) return;
+      var als = m.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+      if (als.indexOf(allianceName.toLowerCase()) < 0) return;
+      parseWarNames(m.wars).forEach(function(w) {
+        var key = w.name.toLowerCase();
+        if (!remainingWars[key]) remainingWars[key] = { name: w.name, counts: {} };
+        remainingWars[key].counts[w.side] = (remainingWars[key].counts[w.side] || 0) + 1;
+      });
+    });
+    var validWarKeys = Object.keys(remainingWars);
+    workingNations.forEach(function(m, mi) {
+      if (mi === idx) return;
+      if (!m.alliances) return;
+      var als = m.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+      if (als.indexOf(allianceName.toLowerCase()) < 0) return;
+      var memberWars = parseWarNames(m.wars);
+      var synced = [];
+      validWarKeys.forEach(function(key) {
+        var entry = remainingWars[key];
+        var existing_war = memberWars.find(function(mw){ return mw.name.toLowerCase() === key; });
+        synced.push({ name: entry.name, side: existing_war ? existing_war.side : parseInt(Object.keys(entry.counts)[0]) || 0, days: existing_war ? existing_war.days : 0 });
+      });
+      m.wars = synced.map(function(w){ return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+    });
+
+    var logMsg = playerName + ' left alliance: ' + allianceName;
+    if (warNames.length) logMsg += ' — also left wars: ' + warNames.join(', ');
+    if (opposingPlayers.length) logMsg += ' (truced with ' + opposingPlayers.length + ' opponents)';
+    addToLog(logMsg);
     refreshAutoDropdowns();
   });
   // Leave the alliance GC
   try { await leaveAllianceGc(allianceName); } catch(e) { console.warn('[ALLIANCE GC] leave failed', e); }
-  showToast(playerName + ' has left ' + allianceName + '.', 'success');
+  showToast(playerName + ' has left ' + allianceName + ' and all alliance wars.', 'success');
   renderActionsTab();
 }
 
@@ -4066,7 +4124,55 @@ async function processAllianceRequest(req) {
           : allianceName;
       }
     });
-    addToLog('Alliance formed: ' + allianceName + ' — ' + members.join(', '));
+
+    // ── Sync alliance wars onto new member(s) (mirrors admin addPlayerToAlliance) ──
+    var joiningIndices = [];
+    workingNations.forEach(function(n, ni) {
+      var full = normalizeName((n.first_name + ' ' + n.surname).trim());
+      if (members.some(function(m){ return normalizeName(m) === full; })) joiningIndices.push(ni);
+    });
+    // Collect wars held by existing (non-joining) alliance members, majority-vote side
+    var allianceWars = {};
+    workingNations.forEach(function(n, ni) {
+      if (joiningIndices.indexOf(ni) >= 0) return;
+      if (!n.alliances) return;
+      var als = n.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+      if (als.indexOf(allianceName.toLowerCase()) < 0) return;
+      parseWarNames(n.wars).forEach(function(w) {
+        var key = w.name.toLowerCase();
+        if (!allianceWars[key]) allianceWars[key] = { name: w.name, counts: {} };
+        allianceWars[key].counts[w.side] = (allianceWars[key].counts[w.side] || 0) + 1;
+      });
+    });
+    var inheritedWars = Object.keys(allianceWars).map(function(key) {
+      var entry = allianceWars[key];
+      var sides = Object.keys(entry.counts).map(function(s){ return parseInt(s); });
+      var chosenSide = sides.reduce(function(prev, cur){ return entry.counts[cur] > entry.counts[prev] ? cur : prev; }, sides[0] || 0);
+      return { name: entry.name, side: chosenSide, days: 0 };
+    });
+    // Apply inherited wars to every joining player
+    joiningIndices.forEach(function(ni) {
+      var p = workingNations[ni];
+      p.wars = inheritedWars.map(function(w){ return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+    });
+    // Also ensure every existing member has all alliance wars (fill in stragglers)
+    workingNations.forEach(function(n, ni) {
+      if (joiningIndices.indexOf(ni) >= 0) return;
+      if (!n.alliances) return;
+      var als = n.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+      if (als.indexOf(allianceName.toLowerCase()) < 0) return;
+      var memberWars = parseWarNames(n.wars);
+      var changed = false;
+      inheritedWars.forEach(function(iw) {
+        var already = memberWars.find(function(mw){ return mw.name.toLowerCase() === iw.name.toLowerCase(); });
+        if (!already) { memberWars.push({ name: iw.name, side: iw.side, days: 0 }); changed = true; }
+      });
+      if (changed) n.wars = memberWars.map(function(w){ return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+    });
+
+    var logMsg = 'Alliance formed: ' + allianceName + ' — ' + members.join(', ');
+    if (inheritedWars.length) logMsg += ' — inherited wars: ' + inheritedWars.map(function(w){ return w.name + ' (side ' + w.side + ')'; }).join(', ');
+    addToLog(logMsg);
     refreshAutoDropdowns();
   });
   if (result === false) {
@@ -6820,6 +6926,85 @@ async function removePlayerFromWar() {
     return true;
   });
 }
+
+// ── AUDIT: Ensure every player in a war has their alliance also in that war ──
+async function adminSyncAllianceWars() {
+  if (!workingNations || !workingNations.length) { overlordAlert('No game data loaded. Load data first.'); return; }
+  var fixes = [];
+  // Collect all active war names
+  var allWarNames = {};
+  workingNations.forEach(function(n) {
+    parseWarNames(n.wars).forEach(function(w) { allWarNames[w.name.toLowerCase()] = w.name; });
+  });
+  var warList = Object.values(allWarNames);
+  warList.forEach(function(warName) {
+    var sides = getWarSides(warName);
+    [0, 1].forEach(function(side) {
+      sides[side].forEach(function(pi) {
+        var p = workingNations[pi];
+        if (!p.alliances) return;
+        var als = p.alliances.split(',').map(function(a){ return a.trim(); }).filter(function(a){ return a && a !== '—' && a.toLowerCase() !== 'none'; });
+        als.forEach(function(aName) {
+          // Find all alliance members NOT already in this war on this side
+          workingNations.forEach(function(m, mi) {
+            if (!m.alliances) return;
+            var mAls = m.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+            if (mAls.indexOf(aName.toLowerCase()) < 0) return;
+            var mWars = parseWarNames(m.wars);
+            var alreadyIn = mWars.find(function(w){ return w.name.toLowerCase() === warName.toLowerCase(); });
+            if (!alreadyIn) {
+              // Add the member to this war on the same side
+              mWars.push({ name: warName, side: side, days: 0 });
+              m.wars = mWars.map(function(w){ return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+              fixes.push(getWN(mi) + ' → ' + warName + ' (side ' + (side + 1) + ', via alliance ' + aName + ')');
+            }
+          });
+        });
+      });
+    });
+  });
+  if (!fixes.length) {
+    showAdminToast('All wars are already in sync — no fixes needed.', 'success');
+    return;
+  }
+  var confirmed = confirm('The following players will be added to wars to match their alliance:\n\n' + fixes.join('\n') + '\n\nApply ' + fixes.length + ' fix(es)?');
+  if (!confirmed) return;
+  await performActionWithRefresh('Sync alliance wars', function() {
+    // Re-run the same logic inside the refresh/upload cycle so changes get saved
+    var innerFixes = [];
+    workingNations.forEach(function(n) {
+      parseWarNames(n.wars).forEach(function(w) { allWarNames[w.name.toLowerCase()] = w.name; });
+    });
+    Object.values(allWarNames).forEach(function(warName) {
+      var sides = getWarSides(warName);
+      [0, 1].forEach(function(side) {
+        sides[side].forEach(function(pi) {
+          var p = workingNations[pi];
+          if (!p.alliances) return;
+          var als = p.alliances.split(',').map(function(a){ return a.trim(); }).filter(function(a){ return a && a !== '—' && a.toLowerCase() !== 'none'; });
+          als.forEach(function(aName) {
+            workingNations.forEach(function(m, mi) {
+              if (!m.alliances) return;
+              var mAls = m.alliances.split(',').map(function(a){ return a.trim().toLowerCase(); });
+              if (mAls.indexOf(aName.toLowerCase()) < 0) return;
+              var mWars = parseWarNames(m.wars);
+              var alreadyIn = mWars.find(function(w){ return w.name.toLowerCase() === warName.toLowerCase(); });
+              if (!alreadyIn) {
+                mWars.push({ name: warName, side: side, days: 0 });
+                m.wars = mWars.map(function(w){ return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+                innerFixes.push(getWN(mi) + ' → ' + warName);
+              }
+            });
+          });
+        });
+      });
+    });
+    addToLog('Alliance war sync: ' + innerFixes.length + ' fix(es) applied — ' + (innerFixes.join(', ') || 'none'));
+    return true;
+  });
+  showAdminToast('Alliance war sync complete: ' + fixes.length + ' fix(es) applied.', 'success');
+}
+window.adminSyncAllianceWars = adminSyncAllianceWars;
 
 async function removePlayerUpdate() {
   var idx = parseInt(document.getElementById('removePlayerSelect').value);
