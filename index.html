@@ -3252,10 +3252,17 @@ async function performDeclareWarAction() {
 }
 
 async function performInitiateBattleAction() {
+  // Capture inputs BEFORE refreshing Firebase, as the refresh re-renders the DOM
+  var capturedWarName = document.getElementById('actionsBattleWar').value;
+  var targetSelEl = document.getElementById('actionsBattleTarget');
+  var capturedTargetVal = targetSelEl ? parseInt(targetSelEl.value) : NaN;
+
   await refreshFirebaseOnce();
   var idx = findAssignedPlayerIdx();
   if (idx < 0) { overlordAlert('No player assigned.'); return; }
-  var warName = document.getElementById('actionsBattleWar').value;
+  
+  // Use the captured warName if the dropdown reset
+  var warName = document.getElementById('actionsBattleWar').value || capturedWarName;
   if (!warName) { overlordAlert('Select a war that has run at least one day.'); return; }
   var assigned = workingNations[idx];
   var warEntry = parseWarNames(assigned.wars).find(function(w) { return normalizeName(w.name) === normalizeName(warName); });
@@ -3299,11 +3306,9 @@ async function performInitiateBattleAction() {
   var attackers = attackerIds.map(buildBattlePlayer);
   var defenders = defenderIds.map(buildBattlePlayer);
 
-  // Use the selected target player if valid, otherwise fall back to first defender
-  var targetSelEl = document.getElementById('actionsBattleTarget');
-  var targetSelVal = targetSelEl ? parseInt(targetSelEl.value) : NaN;
-  var targetIdx = (!isNaN(targetSelVal) && defenderIds.indexOf(targetSelVal) >= 0)
-    ? targetSelVal
+  // Use the pre-captured target player if valid, otherwise fall back to first defender
+  var targetIdx = (!isNaN(capturedTargetVal) && defenderIds.indexOf(capturedTargetVal) >= 0)
+    ? capturedTargetVal
     : (defenders.length ? defenders[0].idx : null);
 
   var r = simulateBattleTeams(attackers, defenders, targetIdx);
@@ -3326,23 +3331,24 @@ async function performInitiateBattleAction() {
     }).filter(Boolean);
   };
   var brObj = {
-    timestamp: Date.now(),
-    warName: warName,
-    percent: r.percent,
-    result: result,
-    attackerPlayers: attackers.map(function(a){return a.name;}),
-    defenderPlayers: defenders.map(function(d){return d.name;}),
-    attackerEmails: getEmailsForIds(attackerIds),
-    defenderEmails: getEmailsForIds(defenderIds),
-    winnerPlayers: winnerIds2.map(function(pi){return getWN(pi);}),
-    loserPlayers: loserIds2.map(function(pi){return getWN(pi);}),
-    winnerEmails: getEmailsForIds(winnerIds2),
-    loserEmails: getEmailsForIds(loserIds2),
-    rolls: { atkRolls: r.atkRolls, defRolls: r.defRolls, atkTotal: r.atkTotal, defTotal: r.defTotal, defPts: r.defPts },
-    claimed: false,
-    claimedProvinces: [],
-    seenBy: {}
-  };
+    	timestamp: Date.now(),
+    	warName: warName,
+    	percent: r.percent,
+    	result: result,
+    	attackerPlayers: attackers.map(function(a){return a.name;}),
+    	defenderPlayers: defenders.map(function(d){return d.name;}),
+    	attackerEmails: getEmailsForIds(attackerIds),
+    	defenderEmails: getEmailsForIds(defenderIds),
+    	winnerPlayers: winnerIds2.map(function(pi){return getWN(pi);}),
+    	loserPlayers: loserIds2.map(function(pi){return getWN(pi);}),
+    	winnerEmails: getEmailsForIds(winnerIds2),
+    	loserEmails: getEmailsForIds(loserIds2),
+    	primaryLoser: result === 'attacker' ? (targetIdx !== null ? getWN(targetIdx) : getWN(defenderIds[0])) : (result === 'defender' ? getWN(idx) : ''),
+    	rolls: { atkRolls: r.atkRolls, defRolls: r.defRolls, atkTotal: r.atkTotal, defTotal: r.defTotal, defPts: r.defPts },
+    	claimed: false,
+    	claimedProvinces: [],
+    	seenBy: {}
+  	};
   // Mark roller as seen
   if (window.firebaseAuth && window.firebaseAuth.currentUser) {
     var rollerEmailKey = window.firebaseAuth.currentUser.email.toLowerCase().replace(/\./g,'_');
@@ -10133,7 +10139,9 @@ async function claimBattleProvinces(brId) {
   if (!iAmWinner) { overlordAlert('Only the winner can claim provinces.'); return; }
 
   var pctLimit = Math.abs(br.percent || 0);
-  var loserName = (br.loserPlayers||[])[0] || '';
+  var loserName = br.primaryLoser || (br.loserPlayers||[])[0] || '';
+
+  // Read number inputs
 
   // Read number inputs
   var inputs = document.querySelectorAll('.claim-prov-input[data-br="' + brId + '"]');
@@ -10246,11 +10254,13 @@ function renderBattlesTab() {
 
   if (pendingClaims.length > 0) {
     var nHtml = pendingClaims.map(function(br) {
+      var loserName = br.primaryLoser || (br.loserPlayers||[])[0] || '';
       var loserProvinces = workingProvinces.filter(function(pr) {
-        return (br.loserPlayers||[]).some(function(name) { return getPlayerOwnership(pr, name) > 0; });
+        return getPlayerOwnership(pr, loserName) > 0;
       });
       var pctLimit = Math.abs(br.percent||0);
-      var loserName = (br.loserPlayers||[])[0] || '';
+
+      // Budget bar + error placeholder
 
       // Budget bar + error placeholder
       var headerHtml =
