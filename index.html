@@ -1925,10 +1925,13 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
       <div id="panelExport" class="auto-panel" style="display:none;">
         <div id="changeLogDisplay" style="margin-bottom:12px;"></div>
         <p style="font-size:13px;color:var(--color-text-secondary);margin-bottom:12px;">Export the admin workbook or upload the data from your Excel file and admin changes to Firebase.</p>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <button onclick="exportNewWeek()" style="padding:10px 24px;font-family:inherit;font-size:14px;font-weight:600;color:#fff;background:#2563EB;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Export Excel</button>
           <button onclick="importExcelToFirebase()" style="padding:10px 24px;font-family:inherit;font-size:14px;font-weight:600;color:#fff;background:#1D9E75;border:none;border-radius:var(--border-radius-md);cursor:pointer;">Upload to Firebase</button>
+          <button onclick="document.getElementById('adminExcelFileInput').click();" style="padding:10px 24px;font-family:inherit;font-size:14px;font-weight:600;color:#fff;background:#7C3AED;border:none;border-radius:var(--border-radius-md);cursor:pointer;">📂 Import Excel &amp; Upload</button>
+          <input type="file" id="adminExcelFileInput" accept=".xlsx,.xls" style="display:none;">
         </div>
+        <div id="adminExcelUploadStatus" style="margin-top:10px;font-size:13px;display:none;padding:8px 12px;border-radius:var(--border-radius-md);border:1px solid transparent;"></div>
       </div>
     </div>
     </div><!-- end autoControlsPane -->
@@ -9363,6 +9366,115 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     }
   };
   
+  reader.readAsArrayBuffer(file);
+});
+
+// ── Admin page: Import Excel & Upload to Firebase ──────────────────────────
+document.getElementById('adminExcelFileInput').addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  // Reset so the same file can be re-selected later
+  e.target.value = '';
+
+  var statusEl = document.getElementById('adminExcelUploadStatus');
+  function setStatus(msg, type) {
+    statusEl.style.display = 'block';
+    statusEl.textContent = msg;
+    statusEl.style.background = type === 'success' ? '#0d261a' : type === 'error' ? '#2d1a1a' : '#0d1f33';
+    statusEl.style.borderColor = type === 'success' ? '#16a34a' : type === 'error' ? '#dc2626' : '#3b82f6';
+    statusEl.style.color = type === 'success' ? '#4ade80' : type === 'error' ? '#f87171' : '#93c5fd';
+  }
+
+  setStatus('⏳ Reading "' + file.name + '"…', 'info');
+
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      var data = new Uint8Array(ev.target.result);
+      var workbook = XLSX.read(data, { type: 'array' });
+
+      // --- Same workbook loading logic as the Data tab fileInput ---
+      currentWorkbook = { Sheets: {} };
+      nationSheetNames = [];
+      provinceSheetNames = [];
+
+      workbook.SheetNames.forEach(function(sheetName) {
+        currentWorkbook.Sheets[sheetName] = workbook.Sheets[sheetName];
+        if (sheetName.includes('Nations')) {
+          nationSheetNames.push(sheetName);
+        } else if (sheetName.includes('Provinces')) {
+          provinceSheetNames.push(sheetName);
+        }
+      });
+      currentWorkbook.SheetNames = workbook.SheetNames.slice();
+
+      if (!nationSheetNames.length || !provinceSheetNames.length) {
+        setStatus('❌ Excel must contain sheets named "Nations" and "Provinces".', 'error');
+        return;
+      }
+
+      // Populate week selector in Data tab
+      var weekSelect = document.getElementById('weekSelect');
+      if (weekSelect) {
+        weekSelect.innerHTML = '';
+        nationSheetNames.forEach(function(name) {
+          var opt = document.createElement('option');
+          opt.value = name;
+          var match = name.match(/\(([^)]+)\)/);
+          opt.textContent = match ? match[1] : name;
+          weekSelect.appendChild(opt);
+        });
+        if (nationSheetNames.length) {
+          weekSelect.value = nationSheetNames[nationSheetNames.length - 1];
+          currentNationSheet = weekSelect.value;
+          parseNationSheet(currentNationSheet);
+          parseProvincesForWeek(currentNationSheet);
+        }
+      }
+
+      // Initialize working copy and refresh all tabs
+      if (typeof initWorkingCopy === 'function') initWorkingCopy();
+      renderDataTab('Excel File');
+      populateDashboard();
+      populateBattle();
+      populateAutoUpdate();
+      populateMap();
+      if (typeof namegenInit === 'function') namegenInit();
+
+      // Also update the Data tab status indicators
+      var uploadStatus = document.getElementById('uploadStatus');
+      if (uploadStatus) uploadStatus.textContent = 'Loaded from Excel file';
+      var uploadFileName = document.getElementById('uploadFileName');
+      if (uploadFileName) uploadFileName.textContent = 'Excel: ' + file.name;
+      var uploadSuccessMsg = document.getElementById('uploadSuccessMsg');
+      if (uploadSuccessMsg) uploadSuccessMsg.style.display = 'flex';
+
+      setStatus('✅ Loaded ' + nationSheetNames.length + ' week(s) from "' + file.name + '". Uploading to Firebase…', 'info');
+
+      // --- Now upload to Firebase ---
+      var uploadData = buildFirebaseWeeksPayload();
+      if (!uploadData || !Object.keys(uploadData.payload).length) {
+        setStatus('❌ No weeks found in the workbook payload.', 'error');
+        return;
+      }
+      var weekCount = Object.keys(uploadData.payload).length;
+      var weeksRef = window.firebaseRef(window.firebaseDb, 'weeks');
+      window.firebaseSet(weeksRef, null).then(function() {
+        return window.firebaseSet(weeksRef, uploadData.payload);
+      }).then(function() {
+        setStatus('🚀 Uploaded ' + weekCount + ' week(s) — ' + uploadData.totalNations + ' nations, ' + uploadData.totalProvinces + ' provinces — to Firebase successfully.', 'success');
+        showAdminToast('Excel imported & uploaded: ' + weekCount + ' week(s) to Firebase.', 'success');
+        if (typeof addToLog === 'function') addToLog('Admin imported Excel "' + file.name + '" and uploaded: ' + weekCount + ' weeks, ' + uploadData.totalNations + ' nations, ' + uploadData.totalProvinces + ' provinces');
+      }).catch(function(err) {
+        setStatus('❌ Firebase upload failed: ' + err.message, 'error');
+        console.error('[ADMIN IMPORT] Firebase upload error', err);
+      });
+
+    } catch (err) {
+      setStatus('❌ Error reading Excel file: ' + err.message, 'error');
+      console.error('[ADMIN IMPORT] File read error', err);
+    }
+  };
   reader.readAsArrayBuffer(file);
 });
 
