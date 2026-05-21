@@ -1168,7 +1168,9 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
 </head>
 <body>
 
-<!-- Top Bar -->
+<!-- Full-page lockout overlay — covers everything during school hours -->
+<div id="pageLockedOverlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--color-background-primary);overflow:auto;"></div>
+
 <div class="topbar">
   <div class="topbar-brand">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
@@ -1193,7 +1195,6 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
   <button class="tab-btn" data-tab="history">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
-  <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
@@ -11924,14 +11925,14 @@ function _lockoutTick() {
     return;
   }
   var label = formatCountdown(secsUntilLockoutEnd());
-  ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
+  ['chatLockoutCountdown', 'actionsLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.textContent = label;
   });
   var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
   var clock = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
-  ['chatLockoutCountdown', 'actionsLockoutCountdown'].forEach(function(id) {
+  ['chatLockoutCountdown', 'actionsLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById('lockoutClock_' + id);
     if (el) el.textContent = 'Sydney time: ' + clock;
   });
@@ -11940,6 +11941,18 @@ function _lockoutTick() {
 function applyLockoutState() {
   var locked = isLockedOut();
   console.log('[LOCKOUT] applyLockoutState called, locked=' + locked);
+
+  // ── Full page overlay ──
+  var pageOverlay = document.getElementById('pageLockedOverlay');
+  if (pageOverlay) {
+    if (locked) {
+      pageOverlay.innerHTML = buildLockoutHTML('pageLockoutCountdown');
+      pageOverlay.style.display = 'block';
+    } else {
+      pageOverlay.style.display = 'none';
+      pageOverlay.innerHTML = '';
+    }
+  }
 
   // ── Chat ──
   var chatLockoutEl = document.getElementById('chatLockout');
