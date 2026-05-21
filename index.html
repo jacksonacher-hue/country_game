@@ -122,7 +122,7 @@ async function savePlayerColor(hex) {
     window.registeredUsers[key].email = (window.registeredUsers[key].email || (window.firebaseAuth.currentUser && window.firebaseAuth.currentUser.email)) || '';
     window.registeredUsers[key].color = hex;
     updateRegisteredUserColors();
-    // apply immediately to map and chat
+    // apply immediately to map and 
     var assigned = getAssignedPlayer((window.firebaseAuth.currentUser && window.firebaseAuth.currentUser.email) || '');
     if (assigned) {
       mapPlayerColors = mapPlayerColors || {};
@@ -353,7 +353,7 @@ function setAdminAuthUI(user) {
     closeAdminLoginModal();
     registerUserInFirebase(user);
     loadRegisteredUsersIntoDropdown();
-    if (typeof loadChatLastSeenFromCookie === 'function') loadChatLastSeenFromCookie();
+    if (typeof loadLastSeenFromCookie === 'function') loadLastSeenFromCookie();
     // Load alliance GCs the player is already in
     setTimeout(function() { if (typeof subscribeAllianceGcs === 'function') subscribeAllianceGcs(); }, 1500);
     // Check if automatic daily update needs to run
@@ -1195,7 +1195,6 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
   <button class="tab-btn" data-tab="history">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
-  <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
