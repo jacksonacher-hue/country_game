@@ -1195,6 +1195,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
   <button class="tab-btn" data-tab="history">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
+  <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
   <button class="tab-btn" id="espionageTabBtn" data-tab="espionage" style="display:none;">Espionage</button>
 </div>
@@ -10363,7 +10364,7 @@ window.updateClaimBudget = updateClaimBudget;
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
         <div>
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#a78bfa;">📊 Market Economics</div>
-          <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px;">Live conversion rates derived from all open offers — anchored to Eco</div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px;">Conversion rates derived from completed trades — anchored to Eco</div>
         </div>
         <button onclick="refreshEcoRates()" style="padding:5px 14px;font-family:inherit;font-size:11px;font-weight:700;color:#a78bfa;background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.3);border-radius:var(--border-radius-md);cursor:pointer;letter-spacing:0.3px;">↺ Refresh</button>
       </div>
@@ -10820,6 +10821,19 @@ async function acceptMarketplaceOffer(offerId) {
 
   console.log('[MKT] performActionWithRefresh finished — removing offer from Firebase');
 
+  // Archive the completed offer to marketplaceHistory for economics tracking
+  try {
+    var db = window.firebaseDb;
+    var historyRecord = Object.assign({}, offer, {
+      status: 'traded',
+      tradedAt: Date.now()
+    });
+    await window.firebaseSet(window.firebaseRef(db, 'marketplaceHistory/' + offer.id), historyRecord);
+    console.log('[MKT] Offer', offer.id, 'archived to marketplaceHistory');
+  } catch(e) {
+    console.warn('[MKT] Could not archive offer to marketplaceHistory:', e);
+  }
+
   // Delete the offer from Firebase now the trade is done
   try {
     var db = window.firebaseDb;
@@ -10830,7 +10844,7 @@ async function acceptMarketplaceOffer(offerId) {
   }
 
   showToast('Trade completed!', 'success');
-}
+  renderEcoRates(); // refresh economics with newly completed trade
 
 function buildMktOfferLogText(offer) {
   var txt = offer.fromPlayer + ' gave ' + offer.give1Amount + ' ' + mktLabel(offer.give1Resource);
@@ -10920,8 +10934,7 @@ function renderMarketplace() {
     }
   }
 
-  // Update economics panel whenever offers re-render
-  if (typeof renderEcoRates === 'function') { try { renderEcoRates(); } catch(e) {} }
+  // Economics panel now uses completed trade history — refreshed separately via the Refresh button
 }
 
 function mktToggleAuctionFields() {
@@ -11005,9 +11018,8 @@ function ecoExtractPairs(offer) {
   return pairs;
 }
 
-function computeEcoConversionRates() {
-  var offers = (typeof marketplaceOffers !== 'undefined' ? marketplaceOffers : [])
-    .filter(function(o) { return o.status === 'open'; });
+function computeEcoConversionRates(completedOffers) {
+  var offers = completedOffers || [];
 
   // Build samples map: "resA:resB" -> [rate,...] where rate = resB per 1 resA
   var samples = {};
@@ -11080,12 +11092,23 @@ function computeEcoConversionRates() {
   return { rates: rates, isDefault: isDefault, offerCount: offers.length, pairCounts: pairCounts, samples: samples };
 }
 
-function renderEcoRates() {
+async function renderEcoRates() {
   var grid = document.getElementById('mktEcoRatesGrid');
   var basis = document.getElementById('mktEcoRatesBasis');
   if (!grid) return;
 
-  var result = computeEcoConversionRates();
+  // Fetch completed trades from Firebase marketplaceHistory
+  var completedOffers = [];
+  try {
+    var snap = await window.firebaseGet(window.firebaseRef(window.firebaseDb, 'marketplaceHistory'));
+    if (snap.exists()) {
+      completedOffers = Object.values(snap.val());
+    }
+  } catch(e) {
+    console.warn('[MKT] Could not load marketplaceHistory for economics:', e);
+  }
+
+  var result = computeEcoConversionRates(completedOffers);
   var rates = result.rates;
 
   grid.innerHTML = ECO_RATE_RESOURCES.map(function(res) {
@@ -11110,13 +11133,13 @@ function renderEcoRates() {
     var defCount = ECO_RATE_RESOURCES.filter(function(r){ return result.isDefault[r]; }).length;
     var milSamples = (result.samples['econ:military']||[]).concat((result.samples['military:econ']||[]).map(function(v){return 1/v;}));
     var parts = [];
-    if (result.offerCount > 0) parts.push(result.offerCount + ' open offer' + (result.offerCount!==1?'s':''));
+    if (result.offerCount > 0) parts.push(result.offerCount + ' completed trade' + (result.offerCount!==1?'s':''));
     if (milSamples.length > 0) {
       var avg_raw = milSamples.reduce(function(s,v){return s+v;},0)/milSamples.length;
       parts.push('Eco→Military anchor: ' + Math.round(avg_raw*1000)/1000 + ' per Eco');
     }
     if (defCount > 0) parts.push(defCount + ' rate' + (defCount!==1?'s':'') + ' using defaults');
-    basis.innerHTML = parts.length ? parts.join(' · ') : 'No market offers — showing default rates.';
+    basis.innerHTML = parts.length ? parts.join(' · ') : 'No completed trades yet — showing default rates.';
   }
 }
 
