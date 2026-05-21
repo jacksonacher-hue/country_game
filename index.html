@@ -11713,11 +11713,11 @@ async function renderEcoRates() {
       + '<div style="position:absolute;top:0;left:0;width:3px;height:100%;background:' + meta.color + ';"></div>'
       + '<div style="padding-left:8px;">'
         + '<div style="font-size:11px;font-weight:700;color:' + meta.color + ';text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Eco : ' + meta.label + '</div>'
-        + '<div style="font-size:24px;font-weight:700;color:var(--color-text-primary);font-family:'IBM Plex Mono',monospace;letter-spacing:-0.5px;">' + rateStr + '</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--color-text-primary);font-family:\'IBM Plex Mono\',monospace;letter-spacing:-0.5px;">' + rateStr + '</div>'
         + '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">1 Eco = ' + r + ' ' + meta.label + (def ? ' <span style="opacity:0.5;">(default)</span>' : '') + '</div>'
         + demandBar
       + '</div>'
-      + '<button onclick="ecoConvertQuick('' + res + '',' + r + ')" style="margin-left:8px;padding:6px 0;font-family:inherit;font-size:12px;font-weight:700;color:' + meta.color + ';background:rgba(0,0,0,0.2);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);cursor:pointer;width:calc(100% - 8px);">Convert at this rate</button>'
+      + '<button onclick="ecoConvertQuick(\'' + res + '\',' + r + ')" style="margin-left:8px;padding:6px 0;font-family:inherit;font-size:12px;font-weight:700;color:' + meta.color + ';background:rgba(0,0,0,0.2);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);cursor:pointer;width:calc(100% - 8px);">Convert at this rate</button>'
     + '</div>';
   }).join('');
 
