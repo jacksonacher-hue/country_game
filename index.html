@@ -5505,10 +5505,14 @@ function renderForecast(player, ownedProvinces, econIncome, milIncome, defReset,
     if (curFood < 20) penMil = 0;
     if (curStab < 20) penEcon = 0;
     if (curHapp < 20) { penMil /= 2; penEcon /= 2; }
-    // Apply conversion cost to forecast eco income
-    var _fcConvRate = 0.25;
+    // Apply demand-pressured conversion cost to forecast eco income
     if (penEcon > 0) {
-      var _fcDemand = (exportBonus.food + exportBonus.stability + exportBonus.happiness) / _fcConvRate;
+      var _fcRateFood = (typeof applyDemandPressure === 'function') ? applyDemandPressure('food',      0.25) : 0.25;
+      var _fcRateStab = (typeof applyDemandPressure === 'function') ? applyDemandPressure('stability', 0.25) : 0.25;
+      var _fcRateHapp = (typeof applyDemandPressure === 'function') ? applyDemandPressure('happiness', 0.25) : 0.25;
+      var _fcDemand = (exportBonus.food      > 0 ? exportBonus.food      / _fcRateFood : 0)
+                    + (exportBonus.stability  > 0 ? exportBonus.stability  / _fcRateStab : 0)
+                    + (exportBonus.happiness  > 0 ? exportBonus.happiness  / _fcRateHapp : 0);
       penEcon = Math.max(0, penEcon - Math.min(_fcDemand, penEcon));
     }
     curEcon += penEcon;
@@ -7469,21 +7473,23 @@ function runWeeklyUpdate() {
     if (penaltyNotes.length) changes.push(name + ' penalties: ' + penaltyNotes.join('; '));
 
     // 4. Apply conversion rate: exports that pay out as food/stab/happ
-    //    consume eco income at 1:0.25 rate (4% stat per 1 eco).
-    //    The stat bonuses are already added above (step 2); here we reduce
-    //    econGrowth by the eco "cost" that generated those bonuses.
-    var CONV_RATE = 0.25; // 1 eco → 0.25% pop stat (or 1 eco → 4% pop stat → rate=0.25)
+    //    consume eco income proportionally. The rate per resource uses the
+    //    live demand-pressured market rate (via _mktWeeklyVolume cache).
+    //    Default rate: 0.25 (1 eco → 4% pop stat). High demand lowers the rate,
+    //    making the same export bonus cost more eco income.
     var convCost = 0;
     if (econGrowth > 0) {
       var expTotals = expData.totals;
-      // Each 1 eco of income that produced pop-stat output costs CONV_RATE fraction
-      // converted stat bonus = eco_slice * CONV_RATE  =>  eco_slice = bonus / CONV_RATE
-      var demandedEco = (expTotals.food + expTotals.stability + expTotals.happiness) / CONV_RATE;
-      // Cap so we never consume more eco than actually came in
+      var convRateFood  = (typeof applyDemandPressure === 'function') ? applyDemandPressure('food',      0.25) : 0.25;
+      var convRateStab  = (typeof applyDemandPressure === 'function') ? applyDemandPressure('stability', 0.25) : 0.25;
+      var convRateHapp  = (typeof applyDemandPressure === 'function') ? applyDemandPressure('happiness', 0.25) : 0.25;
+      // eco cost = stat bonus / rate  (lower rate → higher eco cost)
+      var demandedEco = (expTotals.food      > 0 ? expTotals.food      / convRateFood  : 0)
+                      + (expTotals.stability  > 0 ? expTotals.stability  / convRateStab  : 0)
+                      + (expTotals.happiness  > 0 ? expTotals.happiness  / convRateHapp  : 0);
       convCost = Math.min(demandedEco, econGrowth);
-      // The converted portion yields at CONV_RATE efficiency — so it doesn't add to econ
       econGrowth -= convCost;
-      if (convCost > 0) changes.push(name + ': ' + convCost.toFixed(2) + ' eco converted to pop stats (rate 1:' + CONV_RATE + ')');
+      if (convCost > 0) changes.push(name + ': ' + convCost.toFixed(2) + ' eco consumed by pop-stat exports (market rates)');
     }
 
     // 4. Add growth
@@ -9948,14 +9954,18 @@ async function checkAndRunAutomaticUpdates() {
           if (happ < 20) { milGrowth /= 2; econGrowth /= 2; penaltyNotes.push('happ<20%→halved'); }
           if (penaltyNotes.length) changes.push(name + ' penalties: ' + penaltyNotes.join('; '));
 
-          // Conversion rate: reduce eco income by cost of pop-stat exports (1:0.25)
-          var _CONV_RATE = 0.25;
+          // Conversion rate using live demand-pressured market rates
           if (econGrowth > 0) {
             var _expTotals = expData.totals;
-            var _demandedEco = (_expTotals.food + _expTotals.stability + _expTotals.happiness) / _CONV_RATE;
+            var _crFood = (typeof applyDemandPressure === 'function') ? applyDemandPressure('food',      0.25) : 0.25;
+            var _crStab = (typeof applyDemandPressure === 'function') ? applyDemandPressure('stability', 0.25) : 0.25;
+            var _crHapp = (typeof applyDemandPressure === 'function') ? applyDemandPressure('happiness', 0.25) : 0.25;
+            var _demandedEco = (_expTotals.food      > 0 ? _expTotals.food      / _crFood : 0)
+                             + (_expTotals.stability  > 0 ? _expTotals.stability  / _crStab : 0)
+                             + (_expTotals.happiness  > 0 ? _expTotals.happiness  / _crHapp : 0);
             var _convCost = Math.min(_demandedEco, econGrowth);
             econGrowth -= _convCost;
-            if (_convCost > 0) changes.push(name + ': ' + _convCost.toFixed(2) + ' eco converted to pop stats');
+            if (_convCost > 0) changes.push(name + ': ' + _convCost.toFixed(2) + ' eco consumed by pop-stat exports');
           }
 
           econ += econGrowth;
@@ -10639,7 +10649,7 @@ window.updateClaimBudget = updateClaimBudget;
 
       <!-- ── My Offers ── -->
       <div>
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:var(--color-text-tertiary);margin-bottom:10px;">My Active Offers</div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:var(--color-text-tertiary);margin-bottom:10px;">My Active Offers <span id="mktMyOfferCount" style="font-weight:400;color:var(--color-text-tertiary);text-transform:none;letter-spacing:0;"></span></div>
         <div id="mktMyOffers" style="display:grid;gap:10px;"></div>
       </div>
 
@@ -10765,6 +10775,16 @@ async function postMarketplaceOffer() {
 
   var myPlayer = getWN(idx);
   var myEmail = user.email.toLowerCase();
+
+  // ── Max 3 active offers per player ──
+  var MAX_ACTIVE_OFFERS = 3;
+  var activeOfferCount = marketplaceOffers.filter(function(o) {
+    return o.fromEmail === myEmail && o.status === 'open';
+  }).length;
+  if (activeOfferCount >= MAX_ACTIVE_OFFERS) {
+    overlordAlert('You already have ' + activeOfferCount + ' active offer' + (activeOfferCount !== 1 ? 's' : '') + '. Cancel one before posting a new trade (max ' + MAX_ACTIVE_OFFERS + ' active at a time).');
+    return;
+  }
 
   // Check we have enough of what we're giving
   var player = workingNations[idx];
@@ -11074,6 +11094,15 @@ function renderMarketplace() {
   var myOffers = marketplaceOffers.filter(function(o) { return o.fromEmail === myEmail && o.status === 'open'; });
   var otherOffers = marketplaceOffers.filter(function(o) { return o.fromEmail !== myEmail && o.status === 'open'; });
 
+  // Update slot counter
+  var countEl = document.getElementById('mktMyOfferCount');
+  if (countEl) {
+    var slots = myOffers.length;
+    var atCap = slots >= 3;
+    countEl.textContent = '(' + slots + '/3 slots used)';
+    countEl.style.color = atCap ? '#f87171' : (slots === 2 ? '#fbbf24' : 'var(--color-text-tertiary)');
+  }
+
   // ── My offers ──
   var myEl = document.getElementById('mktMyOffers');
   if (myEl) {
@@ -11203,6 +11232,55 @@ var ECO_DEFAULT_RATES = {
 // ── CIRCUIT BREAKER CONFIG ─────────────────────────────────────────────────
 // Max allowed deviation from baseline per turn cycle (0.5 = ±50%)
 var ECO_CIRCUIT_BREAKER_MAX_CHANGE = 0.5;
+
+// ── SUPPLY & DEMAND PRESSURE ───────────────────────────────────────────────
+// Each unit of a resource bought via the marketplace or eco-conversion adds
+// "demand pressure". High demand → rate decreases (resource becomes expensive).
+// The effect is logarithmic so a single large trade doesn't crash the market.
+//
+//   effective_rate = base_rate / (1 + DEMAND_SENSITIVITY * ln(1 + weeklyVolume / DEMAND_SCALE))
+//
+// DEMAND_SCALE: volume at which rate halves (larger = gentler curve)
+// DEMAND_SENSITIVITY: how strongly volume affects the rate
+var MKT_DEMAND_SCALE       = 20;   // 20 units bought → rate starts falling meaningfully
+var MKT_DEMAND_SENSITIVITY = 0.6;  // dampening factor
+
+// In-memory demand cache (refreshed from Firebase on renderEcoRates)
+var _mktWeeklyVolume = {}; // resource -> total units bought this week across all players
+
+/**
+ * Apply demand pressure to a base rate.
+ * Higher weekly volume → lower rate (resource gets more expensive).
+ */
+function applyDemandPressure(resource, baseRate) {
+  var vol = _mktWeeklyVolume[resource] || 0;
+  if (vol <= 0) return baseRate;
+  var pressureFactor = 1 / (1 + MKT_DEMAND_SENSITIVITY * Math.log(1 + vol / MKT_DEMAND_SCALE));
+  return Math.max(0.05, baseRate * pressureFactor); // floor at 0.05 so rates don't hit zero
+}
+
+/**
+ * Compute this week's total buy-volume per resource from marketplaceHistory.
+ * Returns a map: { food: N, military: N, ... }
+ */
+function computeWeeklyVolume(completedOffers) {
+  var weekStart = getMktWeekStart();
+  var vol = {};
+  ECO_RATE_RESOURCES.forEach(function(r) { vol[r] = 0; });
+  completedOffers.forEach(function(offer) {
+    if ((offer.tradedAt || 0) < weekStart) return;
+    // Track resources received by each side
+    function addVol(res, amt) {
+      if (res && ECO_RATE_RESOURCES.includes(res)) vol[res] = (vol[res] || 0) + (parseFloat(amt) || 0);
+    }
+    // Both sides receive something — count both as "bought"
+    addVol(offer.give1Resource, offer.give1Amount);
+    addVol(offer.give2Resource, offer.give2Amount);
+    addVol(offer.get1Resource,  offer.get1Amount);
+    addVol(offer.get2Resource,  offer.get2Amount);
+  });
+  return vol;
+}
 
 // Helper: get start-of-current-week timestamp (Monday 00:00 UTC)
 function getMktWeekStart() {
@@ -11396,24 +11474,48 @@ async function renderEcoRates() {
   }
 
   var result = computeEcoConversionRates(completedOffers);
-  var rates = result.rates;
+  var baseRates = result.rates;
+
+  // Compute weekly volume and apply demand pressure
+  _mktWeeklyVolume = computeWeeklyVolume(completedOffers);
+  var rates = {};
+  ECO_RATE_RESOURCES.forEach(function(res) {
+    rates[res] = applyDemandPressure(res, baseRates[res]);
+  });
 
   grid.innerHTML = ECO_RATE_RESOURCES.map(function(res) {
     var meta = ECO_RATE_META[res];
+    var baseRate = baseRates[res];
     var rate = rates[res];
     var r = Math.round(rate * 1000) / 1000;
     var rateStr = '1 : ' + r;
     var def = result.isDefault[res];
+    var vol = Math.round((_mktWeeklyVolume[res] || 0) * 10) / 10;
+    var pressure = baseRate > 0 ? Math.round((1 - rate / baseRate) * 100) : 0;
+    var pColor = pressure >= 40 ? '#f87171' : pressure >= 20 ? '#fbbf24' : '#4ade80';
+    var demandBar = vol > 0
+      ? ('<div style="margin-top:6px;">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">'
+            + '<span style="font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.4px;">Weekly demand</span>'
+            + '<span style="font-size:10px;font-weight:700;color:' + pColor + ';">' + (pressure > 0 ? '▼ ' + pressure + '% pressure' : 'low') + '</span>'
+          + '</div>'
+          + '<div style="height:4px;background:rgba(255,255,255,0.07);border-radius:2px;overflow:hidden;">'
+            + '<div style="height:100%;width:' + Math.min(100, vol / MKT_DEMAND_SCALE * 100).toFixed(1) + '%;background:' + pColor + ';border-radius:2px;"></div>'
+          + '</div>'
+          + '<div style="font-size:10px;color:var(--color-text-tertiary);margin-top:2px;">' + vol + ' units traded this week</div>'
+        + '</div>')
+      : '<div style="margin-top:6px;font-size:10px;color:var(--color-text-tertiary);">No trades this week — base rate</div>';
 
-    return '<div style="background:var(--color-background-secondary);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);padding:14px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;">' +
-      '<div style="position:absolute;top:0;left:0;width:3px;height:100%;background:' + meta.color + ';"></div>' +
-      '<div style="padding-left:8px;">' +
-        '<div style="font-size:11px;font-weight:700;color:' + meta.color + ';text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Eco : ' + meta.label + '</div>' +
-        '<div style="font-size:24px;font-weight:700;color:var(--color-text-primary);font-family:\'IBM Plex Mono\',monospace;letter-spacing:-0.5px;">' + rateStr + '</div>' +
-        '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">1 Eco = ' + r + ' ' + meta.label + (def ? ' <span style="opacity:0.5;">(default)</span>' : '') + '</div>' +
-      '</div>' +
-      '<button onclick="ecoConvertQuick(\'' + res + '\',' + r + ')" style="margin-left:8px;padding:6px 0;font-family:inherit;font-size:12px;font-weight:700;color:' + meta.color + ';background:rgba(0,0,0,0.2);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);cursor:pointer;width:calc(100% - 8px);">Convert at this rate</button>' +
-    '</div>';
+    return '<div style="background:var(--color-background-secondary);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);padding:14px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;">'
+      + '<div style="position:absolute;top:0;left:0;width:3px;height:100%;background:' + meta.color + ';"></div>'
+      + '<div style="padding-left:8px;">'
+        + '<div style="font-size:11px;font-weight:700;color:' + meta.color + ';text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Eco : ' + meta.label + '</div>'
+        + '<div style="font-size:24px;font-weight:700;color:var(--color-text-primary);font-family:'IBM Plex Mono',monospace;letter-spacing:-0.5px;">' + rateStr + '</div>'
+        + '<div style="font-size:11px;color:var(--color-text-tertiary);margin-top:4px;">1 Eco = ' + r + ' ' + meta.label + (def ? ' <span style="opacity:0.5;">(default)</span>' : '') + '</div>'
+        + demandBar
+      + '</div>'
+      + '<button onclick="ecoConvertQuick('' + res + '',' + r + ')" style="margin-left:8px;padding:6px 0;font-family:inherit;font-size:12px;font-weight:700;color:' + meta.color + ';background:rgba(0,0,0,0.2);border:1px solid ' + meta.color + ';border-radius:var(--border-radius-md);cursor:pointer;width:calc(100% - 8px);">Convert at this rate</button>'
+    + '</div>';
   }).join('');
 
   if (basis) {
