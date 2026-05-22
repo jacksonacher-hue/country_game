@@ -2156,16 +2156,27 @@ function loadUserAssignments() {
       window.firebaseOnValue(window.firebaseRef(window.firebaseDb, 'userAssignments'), function(snap) {
         var raw = snap.val() || {};
         console.log('[LOAD] onValue fired. Raw Firebase data:', JSON.stringify(raw));
-        // Decode Firebase keys back to emails (underscore -> dot where needed)
+        // Decode Firebase keys back to emails.
+        // Keys were stored with dots replaced by the token "|dot|" (safe, reversible).
+        // Legacy keys used plain underscore replacement — fall back gracefully.
         var decoded = {};
         Object.keys(raw).forEach(function(k) {
-          // Keys were stored with dots replaced by underscores; restore them
-          // We detect encoded keys by checking if the original email is in registeredUsers
-          var emailGuess = k.replace(/_/g, '.');
+          var emailGuess;
+          if (k.indexOf('|dot|') !== -1) {
+            // New encoding: |dot| → .
+            emailGuess = k.replace(/\|dot\|/g, '.');
+          } else {
+            // Legacy encoding: _ → . (best-effort; ambiguous but kept for back-compat)
+            emailGuess = k.replace(/_/g, '.');
+          }
           decoded[emailGuess] = raw[k];
         });
         userAssignments = decoded;
         console.log('[LOAD] userAssignments set to:', JSON.stringify(userAssignments));
+        // Re-run auth UI so logged-in users see their assignment immediately
+        if (typeof setAdminAuthUI === 'function' && window.firebaseAuth && window.firebaseAuth.currentUser) {
+          setAdminAuthUI(window.firebaseAuth.currentUser);
+        }
         renderAssignmentList();
         if (typeof renderActionsTab === 'function') renderActionsTab();
         if (typeof populateChatDmDropdown === 'function') populateChatDmDropdown();
@@ -2192,10 +2203,11 @@ function saveUserAssignments() {
     console.error('[SAVE] Firebase globals missing — assignment NOT saved.');
     return;
   }
-  // Encode email keys for Firebase (dots not allowed in keys)
+  // Encode email keys for Firebase (dots not allowed in keys).
+  // Use |dot| as a safe, reversible token instead of plain underscore.
   var encoded = {};
   Object.keys(userAssignments).forEach(function(email) {
-    encoded[email.replace(/\./g, '_')] = userAssignments[email];
+    encoded[email.replace(/\./g, '|dot|')] = userAssignments[email];
   });
   console.log('[SAVE] Writing to Firebase path "userAssignments" (encoded keys):', JSON.stringify(encoded));
   window.firebaseSet(window.firebaseRef(window.firebaseDb, 'userAssignments'), encoded)
