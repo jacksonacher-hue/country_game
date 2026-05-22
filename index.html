@@ -1198,7 +1198,7 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
   <button class="tab-btn" data-tab="map">Map</button>
   <button class="tab-btn" data-tab="actions">Actions</button>
   <button class="tab-btn" id="battlesTabBtn" data-tab="battles">⚔ Battles</button>
-  <button class="tab-btn" data-tab="history">History</button>
+  <button class="tab-btn" id="historyTabBtn" data-tab="history" style="display:none;">History</button>
   <button class="tab-btn" id="marketplaceTabBtn" data-tab="marketplace">Marketplace</button>
   <button class="tab-btn" id="chatTabBtn" data-tab="chat" style="position:relative;">Chat<span id="chatUnreadBadge" style="display:none;position:absolute;top:3px;right:3px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;text-align:center;pointer-events:none;"></span></button>
   <button class="tab-btn" id="adminTabBtn" data-tab="autoupdate" style="display:none;">Auto Update (Admin)</button>
@@ -2120,13 +2120,18 @@ Object.defineProperty(window, 'adminAllowed', {
 
 function _enforceAdminTabVisibility() {
   var btn = document.getElementById('adminTabBtn');
+  var historyBtn = document.getElementById('historyTabBtn');
   var allowed = isAdminUser();
   if (btn) btn.style.display = allowed ? '' : 'none';
+  if (historyBtn) historyBtn.style.display = allowed ? '' : 'none';
 
-  // If the admin tab is currently active but the user lost access, kick them out
+  // If the admin or history tab is currently active but the user lost access, kick them out
   if (!allowed) {
     var adminContent = document.getElementById('tab-autoupdate');
-    if (adminContent && adminContent.classList.contains('active')) {
+    var historyContent = document.getElementById('tab-history');
+    var needsRedirect = (adminContent && adminContent.classList.contains('active')) ||
+                        (historyContent && historyContent.classList.contains('active'));
+    if (needsRedirect) {
       // Switch to the Data tab silently
       document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
       document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
@@ -4376,8 +4381,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       if (isLockedOut()) { applyLockoutState(); }
       else { renderActionsTab(); subscribePlayerRequests(); }
     }
-    // History tab: subscribe to live game log
+    // History tab: admin-only
     if (tabName === 'history') {
+      if (!isAdminUser()) {
+        console.warn('[TAB SWITCH] History tab access denied — admin only.');
+        openAdminLoginModal();
+        return;
+      }
       subscribeHistoryLog();
     }
     // Battles tab: load and render battle history
