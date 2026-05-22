@@ -10115,10 +10115,10 @@ function renderHistoryTab() {
         ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,0.15);color:#60a5fa;font-weight:700;">PLAYER</span>'
         : '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(251,191,36,0.12);color:#fbbf24;font-weight:700;">ADMIN</span>';
       var emailLine = isAdmin && e.email
-        ? '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;margin-left:6px;">' + esc(e.email) + '</span>'
+        ? '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:\'IBM Plex Mono\',monospace;margin-left:6px;">' + esc(e.email) + '</span>'
         : '';
       var uidLine = isAdmin && e.uid
-        ? '<span style="font-size:9px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;margin-left:4px;opacity:0.6;" title="Firebase UID">uid:' + esc(e.uid.slice(0,8)) + '…</span>'
+        ? '<span style="font-size:9px;color:var(--color-text-tertiary);font-family:\'IBM Plex Mono\',monospace;margin-left:4px;opacity:0.6;" title="Firebase UID">uid:' + esc(e.uid.slice(0,8)) + '\u2026</span>'
         : '';
       var extraFields = '';
       ['channel','preview','ecoSpent','centerCount','hex'].forEach(function(k) {
@@ -10128,7 +10128,7 @@ function renderHistoryTab() {
       });
       html +=
         '<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);transition:border-color 0.1s;"' +
-          ' onmouseover="this.style.borderColor='var(--color-border-primary)'" onmouseout="this.style.borderColor='var(--color-border-secondary)'">' +
+          ' onmouseover="this.style.borderColor=\'var(--color-border-primary)\'" onmouseout="this.style.borderColor=\'var(--color-border-secondary)\'">' +
           '<div style="width:22px;height:22px;border-radius:4px;background:' + catMeta.color + '22;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;margin-top:1px;" title="' + esc(catMeta.label) + '">' + catMeta.icon + '</div>' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;color:var(--color-text-primary);line-height:1.5;">' + esc(e.msg || '') + '</div>' +
@@ -10136,7 +10136,7 @@ function renderHistoryTab() {
             '<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
               '<span style="font-size:11px;font-weight:700;color:' + dotColor + ';">' + esc(e.player || 'System') + '</span>' +
               emailLine + uidLine +
-              '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;">' + esc(time) + '</span>' +
+              '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:\'IBM Plex Mono\',monospace;">' + esc(time) + '</span>' +
               sourceTag +
             '</div>' +
           '</div>' +
