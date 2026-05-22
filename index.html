@@ -12906,14 +12906,21 @@ applyLockoutState();
 setInterval(_updateLockoutHud, 1000);
 setInterval(function() { _lockoutCached = isInLockoutPeriod(); applyLockoutState(); }, 60000);
 
-// ── Anti-tamper: reset all lockout state every 5 seconds ──
+// ── Anti-tamper: reset all lockout state every second ──
 setInterval(function() {
+  LOCKOUT_START_H = 8;  LOCKOUT_START_M = 20;
+  LOCKOUT_END_H   = 14; LOCKOUT_END_M   = 50;
   var wasOverridden = _lockoutOverride !== null && !_lockoutOverride && isInLockoutPeriod();
   _lockoutOverride = null;
   _lockoutCached = isInLockoutPeriod();
+  if (_lockoutCached && !_lockoutTickInterval) {
+    _lockoutTickInterval = setInterval(_lockoutTick, 1000);
+  } else if (!_lockoutCached && _lockoutTickInterval) {
+    clearInterval(_lockoutTickInterval); _lockoutTickInterval = null;
+  }
   if (wasOverridden) applyTouchGrassScreen();
   else applyLockoutState();
-}, 5000);
+}, 1000);
 _updateLockoutHud();
 // ══════════════════════════════════════════════════════
 </script>
