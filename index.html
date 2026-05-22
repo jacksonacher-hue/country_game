@@ -12787,14 +12787,14 @@ function _lockoutTick() {
     return;
   }
   var label = formatCountdown(secsUntilLockoutEnd());
-  ['chatLockoutCountdown', 'actionsLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
+  ['chatLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.textContent = label;
   });
   var t = getSydneyTime();
   var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
   var clock = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
-  ['chatLockoutCountdown', 'actionsLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
+  ['chatLockoutCountdown', 'pageLockoutCountdown'].forEach(function(id) {
     var el = document.getElementById('lockoutClock_' + id);
     if (el) el.textContent = 'Sydney time: ' + clock;
   });
@@ -12832,20 +12832,14 @@ function applyLockoutState() {
     }
   }
 
-  // ── Actions ──
-  var actionsLockoutEl  = document.getElementById('actionsLockout');
-  var actionsInner      = document.getElementById('actionsTabInner');
+  // ── Actions — lockout removed; always accessible ──
+  var actionsLockoutEl = document.getElementById('actionsLockout');
+  var actionsInner     = document.getElementById('actionsTabInner');
   if (actionsLockoutEl) {
-    if (locked) {
-      actionsLockoutEl.innerHTML = buildLockoutHTML('actionsLockoutCountdown');
-      actionsLockoutEl.style.display = 'block';
-      if (actionsInner) actionsInner.style.display = 'none';
-    } else {
-      actionsLockoutEl.style.display = 'none';
-      actionsLockoutEl.innerHTML = '';
-      if (actionsInner) actionsInner.style.display = '';
-    }
+    actionsLockoutEl.style.display = 'none';
+    actionsLockoutEl.innerHTML = '';
   }
+  if (actionsInner) actionsInner.style.display = '';
 
   // Tick every second while locked
   if (locked && !_lockoutTickInterval) {
