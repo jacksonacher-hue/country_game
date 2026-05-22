@@ -2806,35 +2806,45 @@ function actionsPreviewBattle() {
     }
   }
 
-  // ── Check cooldown and update battle button state ──
+  // ── Check charges and update battle button state ──
   var battleBtn = document.querySelector('[onclick="performInitiateBattleAction()"]');
   var resultEl = document.getElementById('actionsBattleResult');
   if (!battleBtn) return;
   var cdKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
   window.firebaseGet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + cdKey)).then(function(snap) {
+    var MS_RECHARGE = 3 * 60 * 60 * 1000; // 3 hours per charge
+    var MAX_CHARGES = 5;
+    var now = Date.now();
+    var usedTimestamps = [];
     if (snap.exists()) {
       var cdData = snap.val();
-      var elapsed = Date.now() - (cdData.lastBattle || 0);
-      var msCooldown = 3 * 60 * 60 * 1000; // 3-hour battle cooldown
-      if (elapsed < msCooldown) {
-        var msLeft = msCooldown - elapsed;
-        var hLeft = Math.floor(msLeft / 3600000);
-        var mLeft = Math.floor((msLeft % 3600000) / 60000);
-        var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
-        battleBtn.disabled = true;
-        battleBtn.style.opacity = '0.45';
-        battleBtn.style.cursor = 'not-allowed';
-        battleBtn.textContent = '⏳ Next battle in ' + timeStr;
-        if (resultEl) resultEl.innerHTML = '<div style="padding:14px 16px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.3);border-radius:var(--border-radius-lg);font-size:12px;color:var(--color-text-warning);">⏳ <strong>' + esc(cdData.rolledBy || 'Someone') + '</strong> already fought a battle in this war recently. Next battle available in <strong>' + timeStr + '</strong>.</div>';
-        return;
-      }
+      // Support legacy single-timestamp format
+      var rawCharges = Array.isArray(cdData.charges) ? cdData.charges : (cdData.lastBattle ? [cdData.lastBattle] : []);
+      // Filter to only timestamps still on cooldown
+      usedTimestamps = rawCharges.filter(function(ts) { return (now - ts) < MS_RECHARGE; });
     }
-    // No cooldown — re-enable
+    var availableCharges = MAX_CHARGES - usedTimestamps.length;
+    if (availableCharges <= 0) {
+      // All charges spent — find when the oldest one recharges
+      var oldestTs = Math.min.apply(null, usedTimestamps);
+      var msLeft = MS_RECHARGE - (now - oldestTs);
+      var hLeft = Math.floor(msLeft / 3600000);
+      var mLeft = Math.floor((msLeft % 3600000) / 60000);
+      var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
+      battleBtn.disabled = true;
+      battleBtn.style.opacity = '0.45';
+      battleBtn.style.cursor = 'not-allowed';
+      battleBtn.textContent = '⏳ Next charge in ' + timeStr;
+      if (resultEl) resultEl.innerHTML = '<div style="padding:14px 16px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.3);border-radius:var(--border-radius-lg);font-size:12px;color:var(--color-text-warning);">⏳ No battle charges remaining (0/' + MAX_CHARGES + '). Next charge ready in <strong>' + timeStr + '</strong>. Charges refill every 3 hours (max ' + MAX_CHARGES + ').</div>';
+      return;
+    }
+    // Has charges — re-enable
     battleBtn.disabled = false;
     battleBtn.style.opacity = '';
     battleBtn.style.cursor = '';
-    battleBtn.textContent = '⚡ ROLL BATTLE — Apply Full Consequences';
-    if (resultEl && resultEl.innerHTML.includes('already fought')) resultEl.innerHTML = '';
+    var chargeLabel = availableCharges + '/' + MAX_CHARGES + ' charge' + (availableCharges !== 1 ? 's' : '');
+    battleBtn.textContent = '⚡ ROLL BATTLE — Apply Full Consequences (' + chargeLabel + ')';
+    if (resultEl && (resultEl.innerHTML.includes('already fought') || resultEl.innerHTML.includes('No battle charges'))) resultEl.innerHTML = '';
   }).catch(function() {});
 }
 
@@ -3335,34 +3345,37 @@ async function performInitiateBattleAction() {
   var warEntry = parseWarNames(assigned.wars).find(function(w) { return normalizeName(w.name) === normalizeName(warName); });
   if (!warEntry || warEntry.days < 1) { overlordAlert('This war must have been running at least one day.'); return; }
 
-  // ── Battle cooldown check (1 battle per war per day) ──
+  // ── Battle charge check (stacking — max 2, 1 recharges per 3 hours) ──
+  var MS_RECHARGE = 3 * 60 * 60 * 1000;
+  var MAX_CHARGES = 5;
   var cooldownKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  var _usedTimestamps = [];
   try {
     var cdSnap = await window.firebaseGet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + cooldownKey));
     if (cdSnap.exists()) {
       var cdData = cdSnap.val();
-      var elapsed = Date.now() - (cdData.lastBattle || 0);
-      var msCooldown = 3 * 60 * 60 * 1000; // 3-hour battle cooldown
-      if (elapsed < msCooldown) {
-        var msLeft = msCooldown - elapsed;
-        var hLeft = Math.floor(msLeft / 3600000);
-        var mLeft = Math.floor((msLeft % 3600000) / 60000);
-        var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
-        var rolledBy = cdData.rolledBy || 'someone';
-        var resultEl = document.getElementById('actionsBattleResult');
-        if (resultEl) {
-          resultEl.innerHTML = '<div style="padding:16px 18px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-lg);display:flex;align-items:flex-start;gap:12px;">' +
-            '<span style="font-size:22px;line-height:1;">⏳</span>' +
-            '<div>' +
-              '<div style="font-size:13px;font-weight:700;color:var(--color-text-warning);margin-bottom:4px;">Battle on cooldown (3 hours)</div>' +
-              '<div style="font-size:12px;color:var(--color-text-secondary);">A battle in <strong>' + esc(warName) + '</strong> was already rolled by <strong>' + esc(rolledBy) + '</strong>. You can fight again in <strong style="color:var(--color-text-warning);">' + timeStr + '</strong>.</div>' +
-            '</div>' +
-          '</div>';
-        }
-        return;
-      }
+      var rawCharges = Array.isArray(cdData.charges) ? cdData.charges : (cdData.lastBattle ? [cdData.lastBattle] : []);
+      _usedTimestamps = rawCharges.filter(function(ts) { return (Date.now() - ts) < MS_RECHARGE; });
     }
-  } catch(e) { console.warn('[BATTLE] Cooldown check failed', e); }
+    if (_usedTimestamps.length >= MAX_CHARGES) {
+      var oldestTs = Math.min.apply(null, _usedTimestamps);
+      var msLeft = MS_RECHARGE - (Date.now() - oldestTs);
+      var hLeft = Math.floor(msLeft / 3600000);
+      var mLeft = Math.floor((msLeft % 3600000) / 60000);
+      var timeStr = hLeft > 0 ? hLeft + 'h ' + mLeft + 'm' : mLeft + 'm';
+      var resultEl = document.getElementById('actionsBattleResult');
+      if (resultEl) {
+        resultEl.innerHTML = '<div style="padding:16px 18px;background:var(--color-background-warning);border:1px solid rgba(251,191,36,0.35);border-radius:var(--border-radius-lg);display:flex;align-items:flex-start;gap:12px;">' +
+          '<span style="font-size:22px;line-height:1;">⏳</span>' +
+          '<div>' +
+            '<div style="font-size:13px;font-weight:700;color:var(--color-text-warning);margin-bottom:4px;">No battle charges remaining (0/' + MAX_CHARGES + ')</div>' +
+            '<div style="font-size:12px;color:var(--color-text-secondary);">All charges for <strong>' + esc(warName) + '</strong> have been used. Next charge ready in <strong style="color:var(--color-text-warning);">' + timeStr + '</strong>. Charges refill every 3 hours (max ' + MAX_CHARGES + ').</div>' +
+          '</div>' +
+        '</div>';
+      }
+      return;
+    }
+  } catch(e) { console.warn('[BATTLE] Charge check failed', e); }
   var sides = getWarSides(warName);
   var attackerSide = warEntry.side;
   var defenderSide = attackerSide === 0 ? 1 : 0;
@@ -3423,17 +3436,19 @@ async function performInitiateBattleAction() {
   }
   saveBattleResultToFirebase(brObj);
 
-  // ── Write battle cooldown ──
+  // ── Write battle charge (append timestamp, keep only active ones) ──
   try {
     var _cdKey = warName.toLowerCase().replace(/[^a-z0-9]/g, '_');
     var _rollerEmail = (window.firebaseAuth && window.firebaseAuth.currentUser && window.firebaseAuth.currentUser.email) || 'unknown';
     var _myName = getWN(idx);
+    // _usedTimestamps was built during the charge check above; add current battle to it
+    var _newCharges = (_usedTimestamps || []).concat([Date.now()]);
     await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'battleCooldowns/' + _cdKey), {
-      lastBattle: Date.now(),
+      charges: _newCharges,
       warName: warName,
       rolledBy: _myName || _rollerEmail
     });
-  } catch(e) { console.warn('[BATTLE] Could not write cooldown', e); }
+  } catch(e) { console.warn('[BATTLE] Could not write charge', e); }
   // ─────────────────────────────
   // ================================================
 
