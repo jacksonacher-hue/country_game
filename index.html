@@ -3322,8 +3322,9 @@ async function performInitiateBattleAction() {
   var idx = findAssignedPlayerIdx();
   if (idx < 0) { overlordAlert('No player assigned.'); return; }
   
-  // Use the captured warName if the dropdown reset
-  var warName = document.getElementById('actionsBattleWar').value || capturedWarName;
+  // Always use capturedWarName — after refreshFirebaseOnce() re-renders the DOM, the
+  // dropdown resets to its first option, so reading .value post-refresh gives the wrong war.
+  var warName = capturedWarName;
   if (!warName) { overlordAlert('Select a war that has run at least one day.'); return; }
   var assigned = workingNations[idx];
   var warEntry = parseWarNames(assigned.wars).find(function(w) { return normalizeName(w.name) === normalizeName(warName); });
