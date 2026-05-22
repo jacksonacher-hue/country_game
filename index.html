@@ -4109,7 +4109,7 @@ async function respondToPlayerRequest(requestId, accept) {
   if (pendingCount === 0) {
     var processOk = true;
     if (req.type === 'alliance' || req.type === 'addToAlliance') { processOk = await processAllianceRequest(req); }
-    else if (req.type === 'endWar') { processOk = await processEndWarRequest(req); }
+    else if (req.type === 'endWar') { processOk = await processEndWarRequest(req, email); }
     if (processOk !== false) {
       req.status = 'completed';
       showToast('Request accepted and applied!', 'success');
@@ -4238,33 +4238,70 @@ async function processAllianceRequest(req) {
   return true;
 }
 
-async function processEndWarRequest(req) {
+async function processEndWarRequest(req, acceptingEmail) {
   var warName = req.warName;
   if (!warName) return false;
   var peaceLength = parseInt(req.peaceLength, 10) || 3;
-  var result = await performActionWithRefresh('End war (' + warName + ')', function() {
-    var closed = 0;
+
+  // Find the accepting player's nation index from their email
+  var acceptingPlayerName = null;
+  if (acceptingEmail) {
+    var emailLower = acceptingEmail.toLowerCase();
+    // Look up name via userAssignments
+    acceptingPlayerName = getAssignedPlayer(emailLower);
+  }
+  // Fallback: use the request's fromPlayer if acceptor is the sender
+  if (!acceptingPlayerName && acceptingEmail && req.fromEmail && req.fromEmail.toLowerCase() === acceptingEmail.toLowerCase()) {
+    acceptingPlayerName = req.fromPlayer || null;
+  }
+
+  var result = await performActionWithRefresh('Leave war (' + warName + ')', function() {
     var sides = getWarSides(warName);
-    var sideA = sides[0].map(getWN);
-    var sideB = sides[1].map(getWN);
-    workingNations.forEach(function(n) {
-      var wars = parseWarNames(n.wars);
-      var filtered = wars.filter(function(w) { return normalizeName(w.name) !== normalizeName(warName); });
-      if (filtered.length !== wars.length) {
-        closed++;
-        n.wars = filtered.length ? filtered.map(function(w) { return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ') : '';
-        if (sides[0].includes(workingNations.indexOf(n))) {
-          addTruces(workingNations.indexOf(n), sideB, peaceLength);
-        } else if (sides[1].includes(workingNations.indexOf(n))) {
-          addTruces(workingNations.indexOf(n), sideA, peaceLength);
-        }
-      }
-    });
-    addToLog('War ended by agreement: ' + warName + ' (' + closed + ' players removed, ' + peaceLength + '-day truce added)');
+    var sideANames = sides[0].map(getWN);
+    var sideBNames = sides[1].map(getWN);
+
+    // Find the nation index for the accepting player
+    var acceptorIdx = -1;
+    if (acceptingPlayerName) {
+      workingNations.forEach(function(n, ni) {
+        if (normalizeName(getWN(ni)) === normalizeName(acceptingPlayerName)) acceptorIdx = ni;
+      });
+    }
+    // Fallback: scan all nations in the war and pick the one whose assigned email matches
+    if (acceptorIdx < 0 && acceptingEmail) {
+      sides[0].concat(sides[1]).forEach(function(ni) {
+        var name = getWN(ni);
+        var assignedEmail = getAssignedEmailForName(name);
+        if (assignedEmail && assignedEmail.toLowerCase() === acceptingEmail.toLowerCase()) acceptorIdx = ni;
+      });
+    }
+
+    if (acceptorIdx < 0) {
+      overlordAlert('Could not find your nation in this war.');
+      return false;
+    }
+
+    var acceptorInSideA = sides[0].includes(acceptorIdx);
+    var opposingNames = acceptorInSideA ? sideBNames : sideANames;
+
+    // Remove only the accepting player from the war
+    var n = workingNations[acceptorIdx];
+    var wars = parseWarNames(n.wars);
+    var filtered = wars.filter(function(w) { return normalizeName(w.name) !== normalizeName(warName); });
+    if (filtered.length === wars.length) {
+      overlordAlert('You are not in this war.');
+      return false;
+    }
+    n.wars = filtered.length ? filtered.map(function(w) { return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ') : '';
+
+    // Add truces between the accepting player and all opponents
+    addTruces(acceptorIdx, opposingNames, peaceLength);
+
+    addToLog(getWN(acceptorIdx) + ' left war: ' + warName + ' (peace, ' + peaceLength + '-day truce added)');
     refreshAutoDropdowns();
   });
   if (result === false) {
-    showToast('War could not be ended — no game data loaded. Load data from the Data tab first.', 'error');
+    showToast('War could not be left — no game data loaded. Load data from the Data tab first.', 'error');
     return false;
   }
   return true;
