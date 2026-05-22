@@ -116,6 +116,7 @@ async function savePlayerColor(hex) {
     var key = getMyRegisteredUserKey();
     if (!key) { showAdminToast('Not logged in', 'error'); return; }
     await window.firebaseSet(window.firebaseRef(window.firebaseDb, 'registeredUsers/' + key + '/color'), hex);
+    logAction('profile', 'Player colour changed to ' + hex, { hex: hex });
     // update local cache
     window.registeredUsers = window.registeredUsers || {};
     window.registeredUsers[key] = window.registeredUsers[key] || {};
@@ -1595,21 +1596,54 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
 <!-- ═══════════ HISTORY TAB ═══════════ -->
 <div class="tab-content" id="tab-history">
   <div style="padding:0;">
-    <div style="padding:16px 24px;border-bottom:1px solid var(--color-border-secondary);background:var(--color-background-secondary);display:flex;align-items:center;gap:12px;">
+    <!-- Header bar -->
+    <div style="padding:14px 24px;border-bottom:1px solid var(--color-border-secondary);background:var(--color-background-secondary);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <div>
         <div style="font-size:15px;font-weight:700;">Action History</div>
         <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:2px;">All player actions across the entire game</div>
       </div>
-      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <input id="historySearch" type="text" placeholder="Search…" oninput="filterHistoryLog()"
-          style="padding:6px 10px;font-size:12px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);width:200px;">
+          style="padding:6px 10px;font-size:12px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);width:180px;">
         <select id="historyPlayerFilter" onchange="filterHistoryLog()"
           style="padding:6px 10px;font-size:12px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-secondary);color:var(--color-text-primary);">
           <option value="">All Players</option>
         </select>
+        <select id="historyCategoryFilter" onchange="filterHistoryLog()"
+          style="padding:6px 10px;font-size:12px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-secondary);color:var(--color-text-primary);">
+          <option value="">All Categories</option>
+          <option value="battle">⚔ Battle</option>
+          <option value="economy">💰 Economy</option>
+          <option value="diplomacy">🤝 Diplomacy</option>
+          <option value="espionage">🕵 Espionage</option>
+          <option value="chat">💬 Chat</option>
+          <option value="profile">🎨 Profile</option>
+          <option value="admin">🛠 Admin</option>
+          <option value="system">⚙ System</option>
+          <option value="other">Other</option>
+        </select>
+        <select id="historySourceFilter" onchange="filterHistoryLog()"
+          style="padding:6px 10px;font-size:12px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-secondary);color:var(--color-text-primary);">
+          <option value="">All Sources</option>
+          <option value="player_action">Player Actions</option>
+          <option value="admin_panel">Admin Panel</option>
+        </select>
+        <button onclick="exportHistoryLog()" title="Export visible log as CSV"
+          style="padding:6px 12px;font-family:inherit;font-size:12px;font-weight:600;background:var(--color-background-tertiary);border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);cursor:pointer;color:var(--color-text-secondary);">
+          ⬇ Export CSV
+        </button>
+        <span id="historyCount" style="font-size:11px;color:var(--color-text-tertiary);white-space:nowrap;"></span>
       </div>
     </div>
-    <div id="historyTimeline" style="padding:16px 24px;max-height:calc(100vh - 160px);overflow-y:auto;">
+    <!-- Admin-only summary bar -->
+    <div id="historyAdminBar" style="display:none;padding:8px 24px;background:var(--color-background-tertiary);border-bottom:1px solid var(--color-border-secondary);font-size:11px;color:var(--color-text-secondary);display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+      <span style="font-weight:700;color:var(--color-accent);">🛡 Admin View</span>
+      <span id="historySummaryText"></span>
+      <button onclick="historyAdminClearOld()" style="margin-left:auto;padding:4px 10px;font-family:inherit;font-size:11px;background:var(--color-background-danger);border:1px solid rgba(248,113,113,0.3);border-radius:4px;cursor:pointer;color:var(--color-text-danger);">
+        🗑 Delete entries older than 30 days
+      </button>
+    </div>
+    <div id="historyTimeline" style="padding:16px 24px;max-height:calc(100vh - 200px);overflow-y:auto;">
       <div style="text-align:center;color:var(--color-text-tertiary);padding:40px;font-size:13px;">Loading history…</div>
     </div>
   </div>
@@ -6273,7 +6307,8 @@ function toggleAutoPanel(id) {
   }
 }
 
-function addToLog(msg) {
+// ── addToLog: core game action logger (admin actions via the autoupdate panel) ──
+function addToLog(msg, category) {
   var user = window.firebaseAuth ? window.firebaseAuth.currentUser : null;
   var playerName = (user && getAssignedPlayer) ? (getAssignedPlayer(user.email) || user.email) : 'System';
   var entry = {
@@ -6281,7 +6316,10 @@ function addToLog(msg) {
     msg: msg,
     ts: Date.now(),
     player: playerName,
-    email: user ? user.email.toLowerCase() : ''
+    email: user ? user.email.toLowerCase() : '',
+    uid: user ? user.uid : '',
+    category: category || _inferLogCategory(msg),
+    source: 'admin_panel'
   };
   changeLog.push(entry);
   renderChangeLog();
@@ -6292,6 +6330,46 @@ function addToLog(msg) {
     window.firebaseSet(window.firebaseRef(window.firebaseDb, 'gameLog/' + id), entry)
       .catch(function(e) { console.warn('addToLog Firebase write failed', e); });
   }
+}
+
+// ── logAction: logs player-initiated actions (chat, espionage, actions tab) ──
+function logAction(category, msg, extra) {
+  var user = window.firebaseAuth ? window.firebaseAuth.currentUser : null;
+  if (!user) return;
+  var playerName = (getAssignedPlayer) ? (getAssignedPlayer(user.email) || user.email) : user.email;
+  var entry = {
+    ts: Date.now(),
+    time: new Date().toLocaleTimeString(),
+    msg: msg,
+    player: playerName,
+    email: user.email.toLowerCase(),
+    uid: user.uid,
+    category: category,
+    source: 'player_action'
+  };
+  if (extra && typeof extra === 'object') {
+    Object.keys(extra).forEach(function(k) { entry[k] = extra[k]; });
+  }
+  if (window.firebaseDb && window.firebaseRef && window.firebaseSet) {
+    var id = 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    window.firebaseSet(window.firebaseRef(window.firebaseDb, 'gameLog/' + id), entry)
+      .catch(function(e) { console.warn('logAction Firebase write failed', e); });
+  }
+}
+window.logAction = logAction;
+
+// Infer a category label from the log message text for legacy addToLog calls
+function _inferLogCategory(msg) {
+  if (!msg) return 'other';
+  var m = msg.toLowerCase();
+  if (m.includes('war declared') || m.includes('battle') || m.includes('province') || m.includes('ceded') || m.includes('seized') || m.includes('transfer')) return 'battle';
+  if (m.includes('trade') || m.includes('subsidy') || m.includes('conversion') || m.includes('eco') || m.includes('marketplace')) return 'economy';
+  if (m.includes('alliance')) return 'diplomacy';
+  if (m.includes('espionage') || m.includes('signal')) return 'espionage';
+  if (m.includes('chat')) return 'chat';
+  if (m.includes('upload') || m.includes('export') || m.includes('import') || m.includes('daily') || m.includes('weekly')) return 'system';
+  if (m.includes('player') || m.includes('assign') || m.includes('created')) return 'admin';
+  return 'other';
 }
 
 function renderChangeLog() {
@@ -9928,8 +10006,23 @@ function esc(str) {
 var historyLogCache = [];
 var historyUnsubscribe = null;
 
+// Category display config
+var HISTORY_CATEGORY_META = {
+  battle:    { icon: '⚔',  label: 'Battle',    color: '#f87171' },
+  economy:   { icon: '💰', label: 'Economy',   color: '#4ade80' },
+  diplomacy: { icon: '🤝', label: 'Diplomacy', color: '#60a5fa' },
+  espionage: { icon: '🕵', label: 'Espionage', color: '#a78bfa' },
+  chat:      { icon: '💬', label: 'Chat',      color: '#34d399' },
+  profile:   { icon: '🎨', label: 'Profile',   color: '#fbbf24' },
+  admin:     { icon: '🛠', label: 'Admin',     color: '#fb923c' },
+  system:    { icon: '⚙',  label: 'System',    color: '#8b949e' },
+  other:     { icon: '•',  label: 'Other',     color: '#484f58' }
+};
+
 function subscribeHistoryLog() {
   if (historyUnsubscribe) { try { historyUnsubscribe(); } catch(e){} }
+  var el = document.getElementById('historyTimeline');
+  if (el) el.innerHTML = '<div style="text-align:center;color:var(--color-text-tertiary);padding:40px;font-size:13px;">Loading history…</div>';
   try {
     historyUnsubscribe = window.firebaseOnValue(
       window.firebaseRef(window.firebaseDb, 'gameLog'),
@@ -9938,12 +10031,12 @@ function subscribeHistoryLog() {
         historyLogCache = data ? Object.values(data) : [];
         historyLogCache.sort(function(a, b) { return (b.ts || 0) - (a.ts || 0); });
         renderHistoryTab();
+        renderHistoryAdminBar();
       }
     );
   } catch(e) {
     console.warn('subscribeHistoryLog failed', e);
-    document.getElementById('historyTimeline').innerHTML =
-      '<div style="color:var(--color-text-tertiary);padding:40px;text-align:center;">Could not load history.</div>';
+    if (el) el.innerHTML = '<div style="color:var(--color-text-tertiary);padding:40px;text-align:center;">Could not load history.</div>';
   }
 }
 
@@ -9951,12 +10044,29 @@ function filterHistoryLog() {
   renderHistoryTab();
 }
 
+function _getHistoryFiltered() {
+  var search = (document.getElementById('historySearch') || {}).value || '';
+  var playerFilter = (document.getElementById('historyPlayerFilter') || {}).value || '';
+  var categoryFilter = (document.getElementById('historyCategoryFilter') || {}).value || '';
+  var sourceFilter = (document.getElementById('historySourceFilter') || {}).value || '';
+  return historyLogCache.filter(function(e) {
+    if (playerFilter && e.player !== playerFilter) return false;
+    if (categoryFilter && (e.category || 'other') !== categoryFilter) return false;
+    if (sourceFilter && (e.source || '') !== sourceFilter) return false;
+    if (search) {
+      var q = search.toLowerCase();
+      return (e.msg || '').toLowerCase().includes(q)
+        || (e.player || '').toLowerCase().includes(q)
+        || (e.email || '').toLowerCase().includes(q)
+        || (e.category || '').toLowerCase().includes(q);
+    }
+    return true;
+  });
+}
+
 function renderHistoryTab() {
   var el = document.getElementById('historyTimeline');
   if (!el) return;
-
-  var search = (document.getElementById('historySearch') || {}).value || '';
-  var playerFilter = (document.getElementById('historyPlayerFilter') || {}).value || '';
 
   // Populate player filter dropdown
   var filterSel = document.getElementById('historyPlayerFilter');
@@ -9969,14 +10079,11 @@ function renderHistoryTab() {
       players.map(function(p) { return '<option value="' + esc(p) + '"' + (p === currentVal ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('');
   }
 
-  var entries = historyLogCache.filter(function(e) {
-    if (playerFilter && e.player !== playerFilter) return false;
-    if (search) {
-      var q = search.toLowerCase();
-      return (e.msg || '').toLowerCase().includes(q) || (e.player || '').toLowerCase().includes(q);
-    }
-    return true;
-  });
+  var entries = _getHistoryFiltered();
+
+  // Update count badge
+  var countEl = document.getElementById('historyCount');
+  if (countEl) countEl.textContent = entries.length + ' of ' + historyLogCache.length + ' entries';
 
   if (!entries.length) {
     el.innerHTML = '<div style="text-align:center;color:var(--color-text-tertiary);padding:60px;font-size:13px;">' +
@@ -9984,33 +10091,56 @@ function renderHistoryTab() {
     return;
   }
 
-  // Group by date
+  var isAdmin = (typeof isAdminUser === 'function') && isAdminUser();
+
+  // Group by date preserving order
   var groups = {};
+  var groupOrder = [];
   entries.forEach(function(e) {
     var d = e.ts ? new Date(e.ts).toLocaleDateString([], { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : 'Unknown Date';
-    if (!groups[d]) groups[d] = [];
+    if (!groups[d]) { groups[d] = []; groupOrder.push(d); }
     groups[d].push(e);
   });
 
   var html = '';
-  Object.keys(groups).forEach(function(date) {
+  groupOrder.forEach(function(date) {
     html += '<div style="font-size:11px;font-weight:700;color:var(--color-accent);text-transform:uppercase;letter-spacing:0.7px;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--color-border-secondary);">' + esc(date) + '</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+    html += '<div style="display:flex;flex-direction:column;gap:5px;">';
     groups[date].forEach(function(e) {
       var time = e.ts ? new Date(e.ts).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' }) : (e.time || '');
-      // Pick a colour per player for the dot
       var dotColor = stringToColor(e.player || 'System');
+      var cat = e.category || 'other';
+      var catMeta = HISTORY_CATEGORY_META[cat] || HISTORY_CATEGORY_META.other;
+      var sourceTag = e.source === 'player_action'
+        ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,0.15);color:#60a5fa;font-weight:700;">PLAYER</span>'
+        : '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(251,191,36,0.12);color:#fbbf24;font-weight:700;">ADMIN</span>';
+      var emailLine = isAdmin && e.email
+        ? '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;margin-left:6px;">' + esc(e.email) + '</span>'
+        : '';
+      var uidLine = isAdmin && e.uid
+        ? '<span style="font-size:9px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;margin-left:4px;opacity:0.6;" title="Firebase UID">uid:' + esc(e.uid.slice(0,8)) + '…</span>'
+        : '';
+      var extraFields = '';
+      ['channel','preview','ecoSpent','centerCount','hex'].forEach(function(k) {
+        if (e[k] !== undefined && e[k] !== null && e[k] !== '') {
+          extraFields += '<span style="font-size:10px;color:var(--color-text-tertiary);margin-left:6px;">' + esc(k) + ': <em>' + esc(String(e[k])) + '</em></span>';
+        }
+      });
       html +=
-        '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 14px;background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);transition:border-color 0.1s;" ' +
-          'onmouseover="this.style.borderColor=\'var(--color-border-primary)\'" onmouseout="this.style.borderColor=\'var(--color-border-secondary)\'">' +
-          '<div style="width:8px;height:8px;border-radius:50%;background:' + dotColor + ';margin-top:5px;flex-shrink:0;"></div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:var(--color-background-secondary);border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);transition:border-color 0.1s;"' +
+          ' onmouseover="this.style.borderColor='var(--color-border-primary)'" onmouseout="this.style.borderColor='var(--color-border-secondary)'">' +
+          '<div style="width:22px;height:22px;border-radius:4px;background:' + catMeta.color + '22;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;margin-top:1px;" title="' + esc(catMeta.label) + '">' + catMeta.icon + '</div>' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;color:var(--color-text-primary);line-height:1.5;">' + esc(e.msg || '') + '</div>' +
-            '<div style="margin-top:4px;display:flex;gap:10px;align-items:center;">' +
+            (extraFields ? '<div style="margin-top:3px;display:flex;flex-wrap:wrap;gap:4px;">' + extraFields + '</div>' : '') +
+            '<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
               '<span style="font-size:11px;font-weight:700;color:' + dotColor + ';">' + esc(e.player || 'System') + '</span>' +
-              '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:\'IBM Plex Mono\',monospace;">' + esc(time) + '</span>' +
+              emailLine + uidLine +
+              '<span style="font-size:10px;color:var(--color-text-tertiary);font-family:'IBM Plex Mono',monospace;">' + esc(time) + '</span>' +
+              sourceTag +
             '</div>' +
           '</div>' +
+          '<div style="font-size:10px;font-weight:700;color:' + catMeta.color + ';white-space:nowrap;padding-top:2px;opacity:0.8;">' + esc(catMeta.label.toUpperCase()) + '</div>' +
         '</div>';
     });
     html += '</div>';
@@ -10019,8 +10149,64 @@ function renderHistoryTab() {
   el.innerHTML = html;
 }
 
+function renderHistoryAdminBar() {
+  var bar = document.getElementById('historyAdminBar');
+  var summaryEl = document.getElementById('historySummaryText');
+  if (!bar || !summaryEl) return;
+  var isAdmin = (typeof isAdminUser === 'function') && isAdminUser();
+  bar.style.display = isAdmin ? 'flex' : 'none';
+  if (!isAdmin) return;
+  var playerCounts = {};
+  historyLogCache.forEach(function(e) {
+    var p = e.player || 'Unknown';
+    playerCounts[p] = (playerCounts[p] || 0) + 1;
+  });
+  var topPlayers = Object.keys(playerCounts).sort(function(a,b){ return playerCounts[b]-playerCounts[a]; }).slice(0,5);
+  summaryEl.textContent = 'Total: ' + historyLogCache.length + ' entries  |  Most active: ' +
+    topPlayers.map(function(p){ return p + ' (' + playerCounts[p] + ')'; }).join(', ');
+}
+
+function exportHistoryLog() {
+  var entries = _getHistoryFiltered();
+  if (!entries.length) { alert('No entries to export.'); return; }
+  var rows = [['Timestamp','Date','Time','Player','Email','UID','Category','Source','Message','Extra'].join(',')];
+  entries.forEach(function(e) {
+    var extra = [];
+    ['channel','preview','ecoSpent','centerCount','hex'].forEach(function(k){ if (e[k] !== undefined) extra.push(k + '=' + e[k]); });
+    var cols = [
+      e.ts || '', e.ts ? new Date(e.ts).toLocaleDateString() : '',
+      e.ts ? new Date(e.ts).toLocaleTimeString() : (e.time || ''),
+      e.player || '', e.email || '', e.uid || '',
+      e.category || 'other', e.source || '', e.msg || '', extra.join('; ')
+    ].map(function(v){ return '"' + String(v).replace(/"/g,'""') + '"'; });
+    rows.push(cols.join(','));
+  });
+  var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'game-history-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 3000);
+}
+window.exportHistoryLog = exportHistoryLog;
+
+async function historyAdminClearOld() {
+  if (!(typeof isAdminUser === 'function' && isAdminUser())) { alert('Admin only.'); return; }
+  var cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+  var snap = await window.firebaseGet(window.firebaseRef(window.firebaseDb, 'gameLog'));
+  if (!snap.exists()) return;
+  var data = snap.val();
+  var toDelete = Object.keys(data).filter(function(k){ return (data[k].ts || 0) < cutoff; });
+  if (!toDelete.length) { showAdminToast('No entries older than 30 days.', 'success'); return; }
+  if (!confirm('Delete ' + toDelete.length + ' log entries older than 30 days?')) return;
+  var updates = {};
+  toDelete.forEach(function(k){ updates['gameLog/' + k] = null; });
+  await window.firebaseUpdate(window.firebaseRef(window.firebaseDb, '/'), updates);
+  showAdminToast('Deleted ' + toDelete.length + ' old log entries.', 'success');
+}
+window.historyAdminClearOld = historyAdminClearOld;
+
 function stringToColor(str) {
-  // Prefer registered user colour when available
   try {
     if (window.registeredUserColors && window.registeredUserColors[str]) return window.registeredUserColors[str];
     if (window.registeredUserColors) {
@@ -10030,7 +10216,6 @@ function stringToColor(str) {
       }
     }
   } catch(e) { console.warn('stringToColor lookup failed', e); }
-  // Deterministic colour from player name string
   var hash = 0;
   for (var i = 0; i < str.length; i++) { hash = str.charCodeAt(i) + ((hash << 5) - hash); }
   var colours = ['#f87171','#fb923c','#fbbf24','#4ade80','#34d399','#60a5fa','#a78bfa','#f472b6','#e879f9','#2dd4bf'];
@@ -12063,6 +12248,11 @@ async function sendChatMessage() {
     var db = window.firebaseDb;
     await window.firebaseSet(window.firebaseRef(db, 'chat/' + chatCurrentChannel + '/' + msg.id), msg);
     console.log('[CHAT] Message sent:', msg.id);
+    // Log to gameLog
+    logAction('chat', 'Chat message sent in channel: ' + chatCurrentChannel, {
+      channel: chatCurrentChannel,
+      preview: text.slice(0, 80) + (text.length > 80 ? '…' : '')
+    });
     if (input) { input.value = ''; input.style.height = 'auto'; }
     // Update last seen
     chatLastSeen[chatCurrentChannel] = msg.ts;
@@ -13162,6 +13352,7 @@ async function performSignalIntercept() {
   var myName = getAssignedPlayerName();
   p.econ = String(Math.round((eco - 5) * 100) / 100);
   syncWorkingDataToSheets();
+  logAction('espionage', 'Signal intercept used — 5 ECO deducted', { ecoSpent: 5 });
   try { await uploadWorkbookToFirebase(); } catch(e) { console.warn('[ESPIONAGE] Could not sync eco to Firebase:', e); }
 
   // Pick a random espionage hub province that the player does NOT know about
@@ -13223,6 +13414,7 @@ async function performEspionage() {
   var myName = getAssignedPlayerName();
   p.econ = String(Math.round((eco - cost) * 100) / 100);
   syncWorkingDataToSheets();
+  logAction('espionage', 'Espionage search performed — keyword redacted', { ecoSpent: cost, centerCount: myCenterCount });
   try { await uploadWorkbookToFirebase(); } catch(e2) { console.warn('[ESPIONAGE] Could not sync eco to Firebase:', e2); }
 
   // Search ALL chat channels from Firebase directly (including DMs not yet opened)
