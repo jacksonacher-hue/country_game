@@ -12806,14 +12806,22 @@ function getSydneyTime() {
   var now = new Date();
   var parts = new Intl.DateTimeFormat('en-AU', {
     timeZone: SYDNEY_TZ,
-    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false
+    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
+    weekday: 'short'
   }).formatToParts(now);
   var get = function(t) { return parseInt(parts.find(function(p){ return p.type===t; }).value, 10); };
-  return { h: get('hour'), m: get('minute'), s: get('second') };
+  var weekday = (parts.find(function(p){ return p.type==='weekday'; }) || {}).value || '';
+  var isWeekend = weekday === 'Sat' || weekday === 'Sun';
+  return { h: get('hour'), m: get('minute'), s: get('second'), isWeekend: isWeekend };
 }
 
 function isInLockoutPeriod() {
   var t = getSydneyTime();
+  // No lockout on weekends
+  if (t.isWeekend) {
+    console.log('[LOCKOUT] Weekend — lockout disabled.');
+    return false;
+  }
   var nowMins  = t.h * 60 + t.m;
   var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
   var endMins   = LOCKOUT_END_H   * 60 + LOCKOUT_END_M;
@@ -13140,7 +13148,8 @@ function _updateLockoutHud() {
   var startMins = LOCKOUT_START_H * 60 + LOCKOUT_START_M;
   var endMins = LOCKOUT_END_H * 60 + LOCKOUT_END_M;
   var timeStr = pad(t.h) + ':' + pad(t.m) + ':' + pad(t.s);
-  hud.textContent = 'SYD ' + timeStr + ' | ' + (locked ? '🔴 BLOCKED' : '🟢 OPEN');
+  var status = t.isWeekend ? '🟣 WEEKEND' : (locked ? '🔴 BLOCKED' : '🟢 OPEN');
+  hud.textContent = 'SYD ' + timeStr + ' | ' + status;
   hud.style.color = locked ? '#ef4444' : 'var(--color-text-tertiary)';
   hud.style.borderColor = locked ? 'rgba(239,68,68,0.4)' : 'var(--color-border-primary)';
 }
