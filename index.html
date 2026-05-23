@@ -1862,6 +1862,15 @@ window.populateWorkbookFromFirebaseData = populateWorkbookFromFirebaseData;
         <div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px;">
           This will completely remove the player from all data: nations list, province ownership, alliances, wars, and exports.
         </div>
+
+        <!-- Auto-prune -->
+        <div class="auto-sub-title" style="margin-top:16px;">Auto-Prune Dead Nations</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;">
+          <button onclick="pruneDeadNations()" style="padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;color:#fff;background:#7C3AED;border:none;border-radius:var(--border-radius-md);cursor:pointer;">🧹 Prune Provinceless Nations</button>
+        </div>
+        <div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px;">
+          Automatically deletes all nations with 0 owned provinces (≥50%), then removes any wars where one side has no remaining participants.
+        </div>
       </div>
     </div>
 
@@ -3457,7 +3466,7 @@ async function performInitiateBattleAction() {
   var winnerIds = result === 'attacker' ? attackerIds : (result === 'defender' ? defenderIds : []);
   var loserIds = result === 'attacker' ? defenderIds : (result === 'defender' ? attackerIds : []);
 
-  // Calculate mil/happiness consequences
+  // Calculate consequences — defender loses 10% defence, no other stat changes
   var pctAbs = Math.abs(r.percent);
   var consequenceRows = [];
 
@@ -3466,14 +3475,10 @@ async function performInitiateBattleAction() {
     var losers = loserIds.map(function(pi) { return {pi:pi, name:getWN(pi), n:workingNations[pi]}; });
 
     winners.forEach(function(w) {
-      var milGain = Math.round(pctAbs * 0.1 * 10) / 10;
-      var happGain = Math.round(pctAbs * 0.05 * 100) / 100;
-      consequenceRows.push({name:w.name, side:'winner', milDelta:'+'+milGain, happDelta:'+'+(happGain*100).toFixed(1)+'%'});
+      consequenceRows.push({name:w.name, side:'winner', defDelta:'—'});
     });
     losers.forEach(function(l) {
-      var milLoss = -Math.round(pctAbs * 0.15 * 10) / 10;
-      var happLoss = -Math.round(pctAbs * 0.08 * 100) / 100;
-      consequenceRows.push({name:l.name, side:'loser', milDelta:milLoss.toFixed(1), happDelta:(happLoss*100).toFixed(1)+'%'});
+      consequenceRows.push({name:l.name, side:'loser', defDelta:'−10%'});
     });
   }
 
@@ -3489,22 +3494,20 @@ async function performInitiateBattleAction() {
   var consecHtml = '<div style="margin-top:4px;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-lg);overflow:hidden;">';
   consecHtml += '<div style="background:var(--color-background-tertiary);padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:var(--color-accent);">📊 Stat Consequences</div>';
   if (result === 'draw') {
-    consecHtml += '<div style="padding:14px;font-size:13px;color:var(--color-text-secondary);">Draw — no mil/happiness changes.</div>';
+    consecHtml += '<div style="padding:14px;font-size:13px;color:var(--color-text-secondary);">Draw — no stat changes.</div>';
   } else {
     consecHtml += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     consecHtml += '<thead><tr style="background:var(--color-background-secondary);">' +
       '<th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:0.5px;">Nation</th>' +
       '<th style="padding:8px 12px;text-align:left;">Outcome</th>' +
-      '<th style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;">Mil Δ</th>' +
-      '<th style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;">Happ Δ</th>' +
+      '<th style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;">Defence Δ</th>' +
       '</tr></thead><tbody>';
     consequenceRows.forEach(function(row, i) {
       var isWin = row.side === 'winner';
       consecHtml += '<tr style="border-top:1px solid var(--color-border-secondary);background:' + (i%2===0?'transparent':'rgba(255,255,255,0.02)') + ';">' +
         '<td style="padding:8px 12px;font-weight:600;">' + esc(row.name) + '</td>' +
         '<td style="padding:8px 12px;"><span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;background:' + (isWin?'rgba(74,222,128,0.15)':'rgba(248,113,113,0.15)') + ';color:' + (isWin?'#4ade80':'#f87171') + ';">' + (isWin?'VICTOR':'DEFEATED') + '</span></td>' +
-        '<td style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;color:' + (isWin?'#4ade80':'#f87171') + ';">' + row.milDelta + '</td>' +
-        '<td style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;color:' + (isWin?'#4ade80':'#f87171') + ';">' + row.happDelta + '</td>' +
+        '<td style="padding:8px 12px;text-align:right;font-family:\'IBM Plex Mono\',monospace;color:' + (isWin?'var(--color-text-tertiary)':'#f87171') + ';">' + row.defDelta + '</td>' +
         '</tr>';
     });
     consecHtml += '</tbody></table>';
@@ -3618,19 +3621,6 @@ async function performInitiateBattleAction() {
           </div>
         </div>` : ''}
 
-        <!-- Eco seizure toggle -->
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--color-background-tertiary);border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-            <input type="checkbox" id="playerSeizeEco" style="width:16px;height:16px;accent-color:var(--color-accent);">
-            <div>
-              <div style="font-weight:600;font-size:13px;">💰 Seize Economy</div>
-              <div style="font-size:11px;color:var(--color-text-tertiary);margin-top:1px;">Steal up to 10 eco from the primary defender</div>
-            </div>
-          </label>
-          <input type="number" id="playerSeizeEcoAmt" min="0.1" max="10" step="0.1" value="10"
-            style="width:70px;margin-left:auto;padding:5px 8px;font-size:13px;font-family:\'IBM Plex Mono\',monospace;text-align:center;border:1px solid var(--color-border-primary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);">
-        </div>
-
         <button class="action-btn gold" style="width:100%;padding:12px;font-size:14px;" onclick="applyBattleRewardAction()">
           ✅ Apply Battle Consequences & Rewards
         </button>
@@ -3692,23 +3682,12 @@ async function applyBattleRewardAction() {
     var winnerIds = state.winnerIds || [];
     var loserIds  = state.loserIds  || [];
 
-    // ── Apply mil/happiness to all sides ──
+    // ── Apply defence loss to losing side ──
     if (state.result !== 'draw') {
-      var milGain = Math.max(0.5, Math.round(pctAbs * 0.1 * 10) / 10);
-      var milLoss = Math.max(1.0, Math.round(pctAbs * 0.15 * 10) / 10);
-      winnerIds.forEach(function(pi) {
-        var n = workingNations[pi];
-        n.military = String(Math.round(((parseFloat(n.military)||0) + milGain) * 100) / 100);
-        var curH = parseFloat(n.happiness)||0, isD = curH <= 1;
-        n.happiness = isD ? String(Math.min(1, Math.round((curH+0.02)*10000)/10000))
-                          : String(Math.min(100, Math.round((curH+2)*100)/100));
-      });
       loserIds.forEach(function(pi) {
         var n = workingNations[pi];
-        n.military = String(Math.round(Math.max(0,(parseFloat(n.military)||0)-milLoss)*100)/100);
-        var curH = parseFloat(n.happiness)||0, isD = curH <= 1;
-        n.happiness = isD ? String(Math.max(0, Math.round((curH-0.05)*10000)/10000))
-                          : String(Math.max(0, Math.round((curH-5)*100)/100));
+        var curDef = parseFloat(n.defence) || 0;
+        n.defence = String(Math.round(Math.max(0, curDef - 10) * 100) / 100);
       });
     }
 
@@ -3777,19 +3756,6 @@ async function applyBattleRewardAction() {
         addToLog('Export seized: "' + taken.name + '" from ' + defName + ' → ' + getWN(toIdx2));
       });
       defender.exports = defExports.map(function(e){return e.name+' - '+e.value+'% '+e.stat;}).join(', ');
-    }
-
-    // ── Apply eco seizure ──
-    var seizeEcoCb = document.getElementById('playerSeizeEco');
-    if (seizeEcoCb && seizeEcoCb.checked && defLoserIdx >= 0) {
-      var ecoAmt = Math.min(parseFloat(document.getElementById('playerSeizeEcoAmt').value)||0, 10);
-      if (ecoAmt > 0) {
-        var def2 = workingNations[defLoserIdx];
-        var available = Math.min(ecoAmt, parseFloat(def2.econ)||0);
-        def2.econ = String(Math.round(Math.max(0,(parseFloat(def2.econ)||0)-available)*100)/100);
-        assignedPlayer.econ = String(Math.round(((parseFloat(assignedPlayer.econ)||0)+available)*100)/100);
-        addToLog('Eco seized: ' + available.toFixed(1) + ' eco from ' + getWN(defLoserIdx) + ' → ' + getWN(idx));
-      }
     }
 
     addToLog('Battle consequences applied: ' + state.warName + ' — ' + state.result + '.');
@@ -7202,6 +7168,95 @@ async function removePlayerUpdate() {
     return true;
   });
 }
+
+// ── Auto-prune: delete nations with 0 owned provinces, then clean up empty-sided wars ──
+async function pruneDeadNations() {
+  // Identify nations with no provinces (≥50% ownership)
+  var dead = workingNations.filter(function(n) {
+    var playerName = ((n.first_name || '') + ' ' + (n.surname || '')).trim();
+    var owned = workingProvinces.filter(function(pr) {
+      return getPlayerOwnership(pr, playerName) >= 50;
+    });
+    return owned.length === 0;
+  });
+
+  if (dead.length === 0) {
+    showAdminToast('No provinceless nations found.', 'success');
+    return;
+  }
+
+  var names = dead.map(function(n) { return ((n.first_name || '') + ' ' + (n.surname || '')).trim(); });
+  if (!confirm(
+    'The following nations have 0 provinces and will be deleted:\n\n' +
+    names.join('\n') +
+    '\n\nWars with an empty side will also be removed from all nations.\n\nContinue?'
+  )) return;
+
+  await performActionWithRefresh('Prune dead nations', function() {
+    // Step 1: remove each dead nation (same logic as removePlayerUpdate)
+    names.forEach(function(playerName) {
+      var idx = workingNations.findIndex(function(n) {
+        return ((n.first_name || '') + ' ' + (n.surname || '')).trim() === playerName;
+      });
+      if (idx === -1) return;
+
+      workingNations.splice(idx, 1);
+
+      // Clear province ownership
+      workingProvinces.forEach(function(p) {
+        for (var oi = 1; oi <= 4; oi++) {
+          var key = 'owner' + oi;
+          if (p[key]) {
+            var owners = parseOwnership(p[key]);
+            owners = owners.filter(function(o) { return normalizeName(o.name) !== normalizeName(playerName); });
+            p[key] = owners.map(function(o) {
+              return o.name.split(' ').map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ') + ' ' + (Math.round(o.percent * 10) / 10) + '%';
+            }).join(', ');
+          }
+        }
+      });
+
+      // Remove war entries that referenced this player by name
+      workingNations.forEach(function(p) {
+        if (!p.wars) return;
+        var wars = parseWarNames(p.wars);
+        p.wars = wars.filter(function(w) { return !w.name.includes(playerName); })
+                     .map(function(w) { return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+      });
+
+      addToLog('Auto-pruned provinceless nation: ' + playerName);
+    });
+
+    // Step 2: remove wars where one side has become empty
+    // Collect all war names still referenced and which sides are present
+    var warSides = {}; // warName (lower) → Set of side numbers still in use
+    workingNations.forEach(function(n) {
+      parseWarNames(n.wars).forEach(function(w) {
+        var k = w.name.toLowerCase();
+        if (!warSides[k]) warSides[k] = { name: w.name, sides: new Set() };
+        warSides[k].sides.add(w.side);
+      });
+    });
+
+    // A war is "empty-sided" if it only has participants on one side (or none)
+    var emptyWars = Object.keys(warSides).filter(function(k) {
+      return warSides[k].sides.size < 2;
+    });
+
+    if (emptyWars.length > 0) {
+      workingNations.forEach(function(n) {
+        if (!n.wars) return;
+        var wars = parseWarNames(n.wars);
+        var filtered = wars.filter(function(w) { return emptyWars.indexOf(w.name.toLowerCase()) === -1; });
+        n.wars = filtered.map(function(w) { return w.name + ' - ' + w.side + ' - ' + w.days; }).join(', ');
+      });
+      addToLog('Removed empty-sided wars: ' + emptyWars.map(function(k) { return warSides[k].name; }).join(', '));
+    }
+
+    return true;
+  });
+}
+window.pruneDeadNations = pruneDeadNations;
 
 function createSeaCrossing() {
   var prov1 = document.getElementById('seaCrossingProv1').value;
